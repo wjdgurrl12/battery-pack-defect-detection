@@ -1,0 +1,11 @@
+.venv
+.git
+.gitignore
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.devcontainer.json
+docker-compose.yml

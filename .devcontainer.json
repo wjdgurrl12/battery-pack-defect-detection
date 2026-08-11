@@ -1,0 +1,27 @@
+{
+  "name": "mlops-vibration-monitoring",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "dev",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "runServices": ["dev", "api", "streamlit", "postgres", "broker", "kafka-ui"],
+  // 이미지에는 의존성만 구워져 있다. 프로젝트 자체(src/)는 여기서 editable 로 설치한다.
+  "postCreateCommand": "uv sync --locked",
+  "forwardPorts": [3000, 8501, 8080, 5432, 9092],
+  "portsAttributes": {
+    "3000": { "label": "FastAPI" },
+    "8501": { "label": "Streamlit" },
+    "8080": { "label": "Kafka UI" },
+    "5432": { "label": "Postgres" },
+    "9092": { "label": "Kafka" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff"],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "python.testing.pytestEnabled": true
+      }
+    }
+  }
+}

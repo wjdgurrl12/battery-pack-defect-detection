@@ -1,1 +1,50 @@
 # mlops-vibration-monitoring
+
+FastAPI + Streamlit + Kafka + Postgres 개발 환경. 클론해서 컨테이너를 띄우면
+바로 개발을 시작할 수 있는 상태가 되는 것이 목표다.
+
+## 시작하기
+
+```bash
+git clone https://github.com/wjdgurrl12/mlops-vibration-monitoring.git
+cd mlops-vibration-monitoring
+docker compose up -d
+```
+
+VS Code 라면 폴더를 연 뒤 **Reopen in Container** 를 누르면 `dev` 컨테이너에
+붙는다. 나머지 서비스도 함께 뜬다.
+
+## 환경이 제대로 떴는지 확인
+
+```bash
+docker compose exec dev pytest
+```
+
+파이썬/라이브러리, Postgres 읽고 쓰기, Kafka 발행→수신 왕복을 확인한다.
+
+## 서비스
+
+| 서비스 | 주소 | 설명 |
+|---|---|---|
+| `dev` | – | 개발 작업용 컨테이너 (`sleep infinity`) |
+| `api` | http://localhost:3000 | FastAPI (`main.py`, `--reload`) |
+| `streamlit` | http://localhost:8501 | Streamlit (`app.py`) |
+| `kafka-ui` | http://localhost:8080 | 토픽/메시지 확인 |
+| `postgres` | `localhost:5432` | `app` / `app` / `appdb` |
+| `broker` | `localhost:9092` | 컨테이너 안에서는 `broker:19092` |
+
+## 구조
+
+- 앱 코드는 이미지에 굽지 않는다. `./` 를 `/workspace` 로 마운트하므로 호스트에서
+  파일을 고치면 컨테이너에 바로 반영된다 (api 는 `--reload` 로 자동 재시작).
+- 가상환경은 `/opt/venv` 에 있다. 마운트에 덮이지 않도록 `/workspace` 밖에 뒀다.
+- 의존성을 바꿨다면 `uv add <pkg>` 후 `docker compose build` 로 이미지를 다시 굽는다.
+- 초기 스키마가 필요하면 `db/init/*.sql` 에 넣는다. Postgres 최초 기동 시 1회 실행되므로,
+  이미 볼륨이 있으면 `docker compose down -v` 로 지워야 다시 적용된다.
+
+## 개발 시작점
+
+- `main.py` — `/health` 만 있는 FastAPI 껍데기
+- `app.py` — API 상태만 확인하는 Streamlit 껍데기
+- `src/vibration_monitoring/` — 공용 모듈을 넣을 패키지
+- `tests/test_smoke.py` — 환경 확인용. 앱 테스트는 `tests/` 에 따로 추가한다
