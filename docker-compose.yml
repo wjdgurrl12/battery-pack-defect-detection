@@ -2,9 +2,13 @@
 # 앱 코드는 이미지에 굽지 않고 ./ 를 /workspace 로 마운트해서 쓴다.
 # 그래서 호스트에서 파일을 고치면 컨테이너에 그대로 반영된다.
 
+# image 는 Docker Hub 에 올라간 태그, build 는 그 이미지를 만드는 방법이다.
+# 팀원은 pull 로 받고(pull_policy: missing), 의존성을 바꾼 사람만 build 후 push 한다.
+# 의존성/Dockerfile 이 바뀌면 태그 버전을 올려서 다시 push 해야 한다 (0.1.0 -> 0.1.1).
 x-app: &app
+  image: 4dcookie/vibration-monitoring-dev:0.1.0
   build: .
-  image: vibration-monitoring-dev:0.1.0
+  pull_policy: missing
   volumes:
     - .:/workspace
   working_dir: /workspace
