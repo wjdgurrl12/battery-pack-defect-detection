@@ -28,6 +28,10 @@ def test_toolchain():
     import sklearn  # noqa: F401
     import streamlit  # noqa: F401
 
+    # 위 라이브러리들과 달리 이건 이미지에 없다. src 레이아웃이라 PYTHONPATH(compose 의
+    # x-app-env) 나 editable 설치 중 하나가 없으면 여기서만 터진다.
+    import vibration_monitoring  # noqa: F401
+
 
 def test_postgres_roundtrip():
     """DB 에 붙어서 쓰고 읽을 수 있는지."""

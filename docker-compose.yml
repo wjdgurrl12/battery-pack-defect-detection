@@ -14,6 +14,11 @@ x-app: &app
   working_dir: /workspace
 
 x-app-env: &app-env
+  # src 레이아웃이라 패키지는 /workspace/src 밑에 있는데, 파이썬은 CWD(/workspace)만
+  # 경로에 넣는다. 이미지에는 의존성만 굽고 프로젝트는 설치하지 않으므로(--no-install-project)
+  # editable 설치가 만들어 주는 .pth 도 없다. 그 자리를 이 한 줄이 대신한다.
+  # (이게 없으면 세 컨테이너 모두 `import vibration_monitoring` 이 실패한다)
+  PYTHONPATH: /workspace/src
   DATABASE_URL: postgresql://app:app@postgres:5432/appdb
   KAFKA_BROKER: broker:19092
 
@@ -59,6 +64,7 @@ services:
     ports:
       - "8501:8501"
     environment:
+      PYTHONPATH: /workspace/src
       API_BASE_URL: http://api:3000
     depends_on:
       api:
@@ -78,7 +84,6 @@ services:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app
       POSTGRES_DB: appdb
-      TZ: Asia/Seoul
     volumes:
       # 초기 스키마가 필요해지면 db/init 에 *.sql 을 넣는다 (최초 기동 시 1회 실행)
       - ./db/init:/docker-entrypoint-initdb.d:ro
