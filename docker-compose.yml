@@ -3,15 +3,27 @@
 # 그래서 호스트에서 파일을 고치면 컨테이너에 그대로 반영된다.
 
 # image 는 Docker Hub 에 올라간 태그, build 는 그 이미지를 만드는 방법이다.
-# 팀원은 pull 로 받고(pull_policy: missing), 의존성을 바꾼 사람만 build 후 push 한다.
-# 의존성/Dockerfile 이 바뀌면 태그 버전을 올려서 다시 push 해야 한다 (0.1.0 -> 0.1.1).
+# 팀원은 pull 로 받고(pull_policy: missing), Dockerfile 이 바뀌면 태그 버전을 올려서
+# 다시 build + push 한다 (0.1.0 -> 0.1.1).
+#
+# 반면 의존성(uv add)만 바뀐 경우는 이미지를 다시 굽지 않아도 된다. 아래 서비스들이
+# 뜰 때마다 `uv sync --locked` 로 자기 /opt/venv 를 uv.lock 에 맞추기 때문이다.
+# uv.lock 은 git 으로 전파되므로, 받는 쪽은 git pull 후 up -d 만 하면 된다.
 x-app: &app
   image: 4dcookie/vibration-monitoring-dev:0.1.0
   build: .
   pull_policy: missing
   volumes:
     - .:/workspace
+    # uv 캐시를 컨테이너 밖에 둬서 기동할 때마다 다시 받지 않게 한다
+    - uv-cache:/root/.cache/uv
   working_dir: /workspace
+
+# 아래 command 들 앞에 붙는 `uv sync --locked --no-install-project` 가 그 동기화다.
+# 변경이 없으면 1초도 걸리지 않고, 늘어난 패키지가 있으면 그것만 받는다.
+# --no-install-project 는 Dockerfile 과 같은 이유다(프로젝트는 PYTHONPATH 로 잡는다).
+# 뒤에 exec 를 붙이는 이유: 실행할 프로세스가 PID 1 을 물려받아 종료 시그널을 직접
+# 받게 하기 위함이다. sh 가 PID 1 로 남으면 시그널을 삼켜서 stop 이 매번 강제 종료된다.
 
 x-app-env: &app-env
   # src 레이아웃이라 패키지는 /workspace/src 밑에 있는데, 파이썬은 CWD(/workspace)만
@@ -26,7 +38,7 @@ services:
   # 개발 작업을 하는 컨테이너. VS Code Dev Containers 가 여기에 붙는다.
   dev:
     <<: *app
-    command: sleep infinity
+    command: sh -c "uv sync --locked --no-install-project && exec sleep infinity"
     environment:
       <<: *app-env
     depends_on:
@@ -38,7 +50,7 @@ services:
   api:
     <<: *app
     # --reload: 코드를 고치면 자동으로 다시 뜬다
-    command: uvicorn main:app --host 0.0.0.0 --port 3000 --reload
+    command: sh -c "uv sync --locked --no-install-project && exec uvicorn main:app --host 0.0.0.0 --port 3000 --reload"
     ports:
       - "3000:3000"
     environment:
@@ -57,7 +69,7 @@ services:
 
   streamlit:
     <<: *app
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    command: sh -c "uv sync --locked --no-install-project && exec streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
     ports:
       - "8501:8501"
     environment:
@@ -129,3 +141,4 @@ services:
 
 volumes:
   pgdata:
+  uv-cache:
