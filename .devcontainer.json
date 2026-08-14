@@ -1,5 +1,5 @@
 {
-  "name": "mlops-vibration-monitoring",
+  "name": "battery-pack-defect-detection",
   "dockerComposeFile": "docker-compose.yml",
   "service": "dev",
   "workspaceFolder": "/workspace",

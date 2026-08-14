@@ -17,7 +17,7 @@ x-app-env: &app-env
   # src 레이아웃이라 패키지는 /workspace/src 밑에 있는데, 파이썬은 CWD(/workspace)만
   # 경로에 넣는다. 이미지에는 의존성만 굽고 프로젝트는 설치하지 않으므로(--no-install-project)
   # editable 설치가 만들어 주는 .pth 도 없다. 그 자리를 이 한 줄이 대신한다.
-  # (이게 없으면 세 컨테이너 모두 `import vibration_monitoring` 이 실패한다)
+  # (이게 없으면 세 컨테이너 모두 `import battery_pack_defect_detection` 이 실패한다)
   PYTHONPATH: /workspace/src
   DATABASE_URL: postgresql://app:app@postgres:5432/appdb
   KAFKA_BROKER: broker:19092
@@ -26,7 +26,6 @@ services:
   # 개발 작업을 하는 컨테이너. VS Code Dev Containers 가 여기에 붙는다.
   dev:
     <<: *app
-    container_name: dev
     command: sleep infinity
     environment:
       <<: *app-env
@@ -38,7 +37,6 @@ services:
 
   api:
     <<: *app
-    container_name: api
     # --reload: 코드를 고치면 자동으로 다시 뜬다
     command: uvicorn main:app --host 0.0.0.0 --port 3000 --reload
     ports:
@@ -59,7 +57,6 @@ services:
 
   streamlit:
     <<: *app
-    container_name: streamlit
     command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0
     ports:
       - "8501:8501"
@@ -77,7 +74,6 @@ services:
 
   postgres:
     image: postgres:17-alpine
-    container_name: postgres
     ports:
       - "5432:5432"
     environment:
@@ -96,7 +92,6 @@ services:
 
   broker:
     image: apache/kafka:4.3.1
-    container_name: broker
     ports:
       - "9092:9092"
     environment:
@@ -122,7 +117,6 @@ services:
 
   kafka-ui:
     image: provectuslabs/kafka-ui:v0.7.2
-    container_name: kafka-ui
     ports:
       - "8080:8080"
     depends_on:

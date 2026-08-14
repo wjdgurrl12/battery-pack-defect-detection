@@ -1,5 +1,5 @@
 [project]
-name = "vibration-monitoring"
+name = "battery-pack-defect-detection"
 version = "0.1.0"
 description = "FastAPI + Streamlit + Kafka + Postgres 개발 환경"
 readme = "README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vibration-monitoring = "vibration_monitoring:main"
+battery-pack-defect-detection = "battery_pack_defect_detection:main"
 
 [build-system]
 requires = ["uv_build>=0.12.2,<0.13.0"]

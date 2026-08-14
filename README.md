@@ -1,4 +1,4 @@
-# mlops-vibration-monitoring
+# battery-pack-defect-detection
 
 FastAPI + Streamlit + Kafka + Postgres 개발 환경. 클론해서 컨테이너를 띄우면
 바로 개발을 시작할 수 있는 상태가 되는 것이 목표다.
@@ -6,8 +6,8 @@ FastAPI + Streamlit + Kafka + Postgres 개발 환경. 클론해서 컨테이너�
 ## 시작하기
 
 ```bash
-git clone https://github.com/wjdgurrl12/mlops-vibration-monitoring.git
-cd mlops-vibration-monitoring
+git clone https://github.com/wjdgurrl12/battery-pack-defect-detection.git
+cd battery-pack-defect-detection
 docker compose up -d
 ```
 
@@ -46,5 +46,5 @@ docker compose exec dev pytest
 
 - `main.py` — `/health` 만 있는 FastAPI 껍데기
 - `app.py` — API 상태만 확인하는 Streamlit 껍데기
-- `src/vibration_monitoring/` — 공용 모듈을 넣을 패키지
+- `src/battery_pack_defect_detection/` — 공용 모듈을 넣을 패키지
 - `tests/test_smoke.py` — 환경 확인용. 앱 테스트는 `tests/` 에 따로 추가한다

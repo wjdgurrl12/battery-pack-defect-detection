@@ -66,6 +66,41 @@ wheels = [
 ]
 
 [[package]]
+name = "battery-pack-defect-detection"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "confluent-kafka" },
+    { name = "fastapi" },
+    { name = "pandas" },
+    { name = "psycopg", extra = ["binary", "pool"] },
+    { name = "requests" },
+    { name = "scikit-learn" },
+    { name = "streamlit" },
+    { name = "uvicorn" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "confluent-kafka", specifier = ">=2.6" },
+    { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "pandas", specifier = ">=3.0.5" },
+    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
+    { name = "requests", specifier = ">=2.34.2" },
+    { name = "scikit-learn", specifier = ">=1.9.0" },
+    { name = "streamlit", specifier = ">=1.61.1" },
+    { name = "uvicorn", specifier = ">=0.52.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8.4" }]
+
+[[package]]
 name = "blinker"
 version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1096,41 +1131,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/03/18/ccce41535dee1be77
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/d5/68e6e9bca63c0badf67002890a46d3784c958de45b65e1275ec583ca1f06/uvicorn-0.52.1-py3-none-any.whl", hash = "sha256:e4403f9d93188cf9d1088e9f40e3acd12630e2df8675316704379a7fc20fff6a", size = 79859, upload-time = "2026-08-01T18:19:29.294Z" },
 ]
-
-[[package]]
-name = "vibration-monitoring"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "confluent-kafka" },
-    { name = "fastapi" },
-    { name = "pandas" },
-    { name = "psycopg", extra = ["binary", "pool"] },
-    { name = "requests" },
-    { name = "scikit-learn" },
-    { name = "streamlit" },
-    { name = "uvicorn" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "confluent-kafka", specifier = ">=2.6" },
-    { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "pandas", specifier = ">=3.0.5" },
-    { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
-    { name = "requests", specifier = ">=2.34.2" },
-    { name = "scikit-learn", specifier = ">=1.9.0" },
-    { name = "streamlit", specifier = ">=1.61.1" },
-    { name = "uvicorn", specifier = ">=0.52.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4" }]
 
 [[package]]
 name = "watchdog"
