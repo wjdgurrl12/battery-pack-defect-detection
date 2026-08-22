@@ -48,3 +48,5 @@ docker compose exec dev pytest
 - `app.py` — API 상태만 확인하는 Streamlit 껍데기
 - `src/battery_pack_defect_detection/` — 공용 모듈을 넣을 패키지
 - `tests/test_smoke.py` — 환경 확인용. 앱 테스트는 `tests/` 에 따로 추가한다
+
+의존성 추가, 이미지 갱신, 컨테이너가 안 뜰 때의 대처는 참고.
