@@ -12,3 +12,6 @@ wheels/
 # Test / tooling caches
 .pytest_cache/
 .ruff_cache/
+test.practice.py
+# 개인 연습장 (팀 저장소에는 올리지 않는다)
+practice_generator.py

@@ -31,7 +31,7 @@ x-app-env: &app-env
   # editable 설치가 만들어 주는 .pth 도 없다. 그 자리를 이 한 줄이 대신한다.
   # (이게 없으면 세 컨테이너 모두 `import battery_pack_defect_detection` 이 실패한다)
   PYTHONPATH: /workspace/src
-  DATABASE_URL: postgresql://app:app@postgres:5432/appdb
+  DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/appdb
   KAFKA_BROKER: broker:19092
 
 services:

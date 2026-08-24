@@ -6,7 +6,7 @@ sensor generator 가 Kafka 로 발행할 측정 이력을 읽어오는 것만 �
 
 pack_measurement 에는 원본 CSV 가 손대지 않은 상태로 들어 있다(480,949행).
 배제 규칙과 5초 정규화는 적재가 아니라 여기, 읽는 시점에 적용한다. 걸러낸
-결과는 83,504행이다. 기준이
+결과는 125,488행이다. 기준이
 바뀌어도 600MB 를 다시 적재하지 않아도 되게 하려는 것이다.
 
 원본은 샘플링 주기가 두 가지로 섞여 있다(1초 파일 72개, 5초 파일 30개).
@@ -194,7 +194,7 @@ def load_measurements(serial_number: int | None = None,
     - cell_voltages: 셀 전압 176개 배열
     - t_min, t_max, t_avg, module_temps: 온도 요약과 32개 배열
 
-    인자를 주지 않으면 83,504행이 나온다. 발행 루프처럼 전량을 훑어야 할
+    인자를 주지 않으면 125,488행이 나온다. 발행 루프처럼 전량을 훑어야 할
     때는 이쪽 대신 iter_measurements 를 쓴다.
     """
     sql, params = _build_query(serial_number, mode, limit)
@@ -213,7 +213,7 @@ def iter_measurements(serial_number: int | None = None,
                       batch_size: int = 1000) -> Generator[dict, None, None]:
     """측정 이력을 5초 간격으로, 한 행씩 dict 로 흘려보낸다. 발행 루프가 쓴다.
 
-    stream_results 라 서버 사이드 커서로 받는다. 83,504행을 그대로 돌려도
+    stream_results 라 서버 사이드 커서로 받는다. 125,488행을 그대로 돌려도
     메모리는 batch_size 만큼만 쓴다.
 
         for row in iter_measurements(serial_number=1000, mode="chg"):
