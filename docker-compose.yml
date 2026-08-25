@@ -74,7 +74,8 @@ services:
       - "8501:8501"
     environment:
       PYTHONPATH: /workspace/src
-      API_BASE_URL: http://api:3000
+      # 화면은 Kafka 두 토픽(측정/판정)만 구독한다. DB 직결은 3단계에서 제거했다.
+      KAFKA_BROKER: broker:19092
     depends_on:
       api:
         condition: service_healthy

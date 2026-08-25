@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wjdgurrl/battery-pack-defect-detection/verdictdata.json",
+  "title": "PackVerdict",
+  "description": "api 가 측정 메시지를 모델로 판정한 결과 1건. **모든 측정에 대해 발행된다** - 정상도 포함한다. 모델은 이상 점수를 내지 않으므로 이 메시지에 점수·임계는 없다. 실리는 것은 판정(state)과 문제 모듈·셀 지목뿐이고, streamlit 은 그 둘만 보고 화면을 칠한다.",
+  "x-kafka": {
+    "topic": "battery.pack.verdict",
+    "partitions": 3,
+    "key": {
+      "field": "serial_number",
+      "encoding": "UTF-8 string",
+      "rationale": "측정 토픽과 같은 키를 쓴다. 팩 하나의 판정이 한 파티션에 모여 발생 순서가 보장되고, 측정과 판정을 같은 기준으로 짝지을 수 있다."
+    },
+    "value": {
+      "format": "JSON",
+      "encoding": "UTF-8"
+    },
+    "producer": {
+      "service": "api (main.py)",
+      "acks": "all",
+      "note": "battery.pack.measurement 를 구독해 전 건을 판정하고 결과를 이 토픽으로 낸다. 점수 배열이 빠지면서 메시지가 약 580바이트에서 300바이트 안팎으로 줄었다 - 측정(2,131바이트)의 15% 수준이라 건수는 같아도 대역폭 부담은 작다."
+    },
+    "consumers": [
+      {
+        "service": "streamlit",
+        "group_id": "streamlit-verdict",
+        "auto_offset_reset": "earliest"
+      }
+    ],
+    "headers": {
+      "state": "'normal' | 'warning' | 'anomaly'. 값 안의 state 와 같다. kafka-ui 필터와 컨슈머가 JSON 을 파싱하지 않고 알림 대상만 거르는 데 쓴다. 측정 토픽이 mode 를 헤더에 싣는 것과 같은 패턴이다."
+    }
+  },
+  "x-conventions": {
+    "traceability": "event_id 는 판정 대상 측정 메시지의 id 다. 알림에서 원본 측정으로 되짚어 갈 수 있게 반드시 실어 보낸다.",
+    "model_stamp": "model.name / model.version 은 이 판정을 낸 모델이다. 모델을 바꾸면 version 이 바뀌므로, 과거 알림이 어느 모델의 판단인지 남는다.",
+    "index_base": "module 은 1~16, cell 은 1~11 이다. 사람이 읽는 M03 / CV07 과 같은 번호다. 배열 인덱스(0부터)와 1 차이가 나는 점을 주의한다.",
+    "timestamps": "measured_at 은 센서 측정 시각(KST), detected_at 은 api 가 판정한 시각(UTC)이다. 재생 시스템이라 둘이 크게 다르다.",
+    "all_states": "정상 판정도 발행한다. 처음에는 이상치만 보내려 했으나, 그러면 화면이 판정 카드와 타일을 칠할 근거가 없어진다(2026-08-24 결정). 판정 권한은 api 한 곳에 둔다.",
+    "no_score": "**모델은 점수를 내지 않는다**(2026-08-25 결정). score / threshold / module_scores 는 1.0.0 에 있었으나 삭제했다. 모델이 안에서 확률이나 재구성 오차를 쓰더라도 그것은 모델의 사정이고, 토픽으로 나가는 것은 판정과 지목뿐이다. 화면이 숫자를 보여주려면 모델이 그 숫자를 계약에 넣어야 한다.",
+    "display_source": "화면이 쓰는 것은 state 와 module 두 가지다. 모듈 타일 16개 중 module 이 짚은 하나에만 상태 색이 들어가고, 나머지는 중립색으로 남는다.",
+    "nullable_target": "module / cell 은 state 가 'normal' 이면 null 이다. 짚을 문제가 없기 때문이다. 컨슈머는 두 값이 없을 수 있다고 보고 다뤄야 한다 - 1.0.0 에서는 정상일 때도 '가장 나쁜 곳' 을 채워 보냈지만, 그것은 점수가 있을 때만 뜻이 있는 값이었다."
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verdict_id",
+    "detected_at",
+    "event_id",
+    "serial_number",
+    "mode",
+    "measured_at",
+    "seq",
+    "state",
+    "module",
+    "cell",
+    "model"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "2.0.0",
+      "description": "판정 메시지 명세 버전. 점수 필드 삭제는 의미 변경이라 major 를 올렸다(docs/kafka-message-spec.md 의 규칙)"
+    },
+    "verdict_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "판정 고유 ID. 알림 중복 제거에 쓴다"
+    },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "api 가 판정한 시각(UTC)"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "판정 대상 측정 메시지의 event_id. 추적용"
+    },
+    "serial_number": {
+      "type": "integer",
+      "description": "팩 식별자. 메시지 키와 같다"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "chg",
+        "dchg"
+      ]
+    },
+    "measured_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "센서 측정 시각(KST)"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "측정 메시지의 재생 순번"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "warning",
+        "anomaly"
+      ],
+      "description": "정상 / 주의 / 이상. 모델이 내는 판정 그 자체다. 화면이 이 값으로 색을 고른다"
+    },
+    "module": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 16,
+      "description": "문제 모듈 번호(M01~M16). state 가 'normal' 이면 null"
+    },
+    "cell": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 11,
+      "description": "문제 셀 번호(CV01~CV11). state 가 'normal' 이면 null"
+    },
+    "detail": {
+      "type": "string",
+      "description": "사람이 읽는 요약. 예: 'M03 CV07 이탈', '이상 없음'"
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "description": "이 판정을 낸 모델",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "2.0.0",
+      "verdict_id": "7c1e9a04-2b83-4f61-9d27-5ae0c3f81b44",
+      "detected_at": "2026-08-24T06:12:44.108Z",
+      "event_id": "018f3a2c-6b41-7c9e-a5d2-3f8e1b0c7d94",
+      "serial_number": 1000,
+      "mode": "chg",
+      "measured_at": "2020-08-04T16:22:15+09:00",
+      "seq": 367,
+      "state": "anomaly",
+      "module": 3,
+      "cell": 7,
+      "detail": "M03 CV07 이탈",
+      "model": {
+        "name": "placeholder-deviation",
+        "version": "0.0.0"
+      }
+    },
+    {
+      "schema_version": "2.0.0",
+      "verdict_id": "b04f2a91-77c5-4e30-8a16-2d9f5c1e0a83",
+      "detected_at": "2026-08-24T06:12:47.212Z",
+      "event_id": "018f3a2c-9d17-7a40-b8e3-51c7a2f09b6d",
+      "serial_number": 1000,
+      "mode": "chg",
+      "measured_at": "2020-08-04T16:22:20+09:00",
+      "seq": 368,
+      "state": "normal",
+      "module": null,
+      "cell": null,
+      "detail": "이상 없음",
+      "model": {
+        "name": "placeholder-deviation",
+        "version": "0.0.0"
+      }
+    }
+  ]
+}
