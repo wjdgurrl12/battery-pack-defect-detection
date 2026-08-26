@@ -34,6 +34,29 @@ x-app-env: &app-env
   DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/appdb
   KAFKA_BROKER: broker:19092
 
+  # ── 이상탐지 모델 (src/README.md · src/.env.example) ─────────────────────
+  # api 가 기동할 때 detector.load() 가 읽는다. 코드에 같은 기본값이 있지만
+  # 여기서 한 번 더 못 박는 이유는, models/ 에 번들이 하나 더 생겼을 때
+  # '가장 최근 것' 이 조용히 바뀌면 안 되기 때문이다. 모델 교체는 이 줄을
+  # 고치는 눈에 보이는 행위여야 한다.
+  BD_ARTIFACT_BUNDLE: /workspace/models/battery_model_20260825_165511_b_option.bundle
+  # 모델 코드. 번들에 복제하지 않고 여기서 import 한다(학습 코드와 갈라지지 않게).
+  BD_SRC_DIR: /workspace/src
+  # 측정 토픽의 주기 [Hz]. **가장 틀리기 쉬운 값이다.**
+  # database.py 가 5초 구간마다 첫 행만 남겨 발행하므로 토픽에는 5초/행이
+  # 흐른다(원본 CSV 는 1초/행이지만 그건 DB 안의 이야기다). 학습 격자도
+  # 5초/행이라 더 솎을 것이 없다 -> 0.2 Hz, stride 1.
+  # 여기에 1.0 을 넣으면 5행 중 1행만 써서 25초/행이 된다. 예외는 나지 않고
+  # 시간 창만 전부 5배로 늘어난다(지속 10->50초, warmup 300->1500초).
+  # 기동 후 /stats 의 model.stride 가 1 인지 반드시 확인할 것.
+  BD_SOURCE_HZ: "0.2"
+  # rule = 룰 기반 연속 점수(임계 11.47). 검출 감도가 가장 높다.
+  # score 로 바꾸면 임계(33.72)도 번들 안에서 짝이 맞춰 따라온다.
+  BD_SCORE_KEY: rule
+  # 기동 시 번들의 코드 해시와 src/step*.py 대조. 어긋나면 기동을 거부한다.
+  # 끄지 말 것 - 모델과 코드가 어긋나면 예외 없이 조용히 틀린 판정이 나온다.
+  BD_VERIFY_HASH: "1"
+
 services:
   # 개발 작업을 하는 컨테이너. VS Code Dev Containers 가 여기에 붙는다.
   dev:

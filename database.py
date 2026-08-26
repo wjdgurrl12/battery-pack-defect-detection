@@ -5,9 +5,14 @@ sensor generator 가 Kafka 로 발행할 측정 이력을 읽어오는 것만 �
     Postgres  --이 파일-->  sensor generator  -->  Kafka  -->  api
 
 pack_measurement 에는 원본 CSV 가 손대지 않은 상태로 들어 있다(480,949행).
-배제 규칙과 5초 정규화는 적재가 아니라 여기, 읽는 시점에 적용한다. 걸러낸
-결과는 125,488행이다. 기준이
-바뀌어도 600MB 를 다시 적재하지 않아도 되게 하려는 것이다.
+배제 규칙·통전 필터·5초 정규화는 적재가 아니라 여기, 읽는 시점에 적용한다.
+기준이 바뀌어도 600MB 를 다시 적재하지 않아도 되게 하려는 것이다.
+
+    480,949행  원본
+      -배제    센티넬·불완전 행·1043·방전 전량(EXCLUDE_DCHG)
+      -정지    |current| <= 1.0 A 인 행 (CURRENT_ON_AMPS)
+      ÷5       5초 구간마다 첫 행만 (RESAMPLE_SECONDS)
+     38,058건  Kafka 로 나가는 측정 메시지 (충전만)
 
 원본은 샘플링 주기가 두 가지로 섞여 있다(1초 파일 72개, 5초 파일 30개).
 그대로 발행하면 팩마다 초당 메시지 수가 5배 차이 나므로, 읽어올 때 5초
@@ -67,14 +72,47 @@ EXCLUDED_FILES = frozenset({"1043_dchg.csv"})
 EXCLUDE_CHG = frozenset({
     1043
 })
-EXCLUDE_DCHG = frozenset({
-    
-})
+
+# 2026-08-26 결정: 방전은 다루지 않기로 했다. 발행 대상을 충전 50구간으로 줄인다.
+#
+# 팩 번호를 전부 적는 대신 range 로 둔 이유: 방전 구간의 serial_number 는
+# 1000~1050 연속 51개다(실측). 목록을 손으로 나열하면 원본에 팩이 늘었을 때
+# 조용히 빠뜨리게 되는데, 범위는 그럴 일이 없다.
+#
+# 방전을 다시 살리려면 이 집합을 frozenset() 으로 비우면 된다. DB 에는 원본이
+# 그대로 있으므로 재적재는 필요 없다 - 그러라고 여기서 거르는 것이다.
+EXCLUDE_DCHG = frozenset(range(1000, 1051))
 
 # 센서 미응답 표시값. 176셀 전압 배열의 실제 최솟값은 3.435V 이고 0 이 한 번도
 # 없으므로, 요약 컬럼만 0 / -40 으로 떨어지는 것은 실측이 아니다.
 SENTINEL_ZERO = ("voltage", "v_min", "v_max")
 SENTINEL_MINUS40 = ("t_min", "t_max", "t_avg")
+
+# 통전 판정 기준 [A]. |current| 가 이보다 커야 발행한다.
+#
+# 2026-08-26 결정: 비통전 행을 발행하지 않는다. 충전이 멈춘 구간은 모델의 적용
+# 범위 밖이라 어차피 판정되지 않고(battery_detector.StreamGate 가 같은 값으로
+# 게이트한다), 발행해 봐야 판정 없는 측정만 쌓인다.
+#
+# 이 값은 모델이 학습 때 쓴 것과 같아야 한다(src/step1_clean.py 의 통전 판정).
+# 실측으로는 0 과 1.0 A 사이의 행이 한 건도 없어서 `<> 0` 과 결과가 같지만,
+# 기준을 모델 쪽에 맞춰 둔다 - 새 데이터에 0.5 A 같은 값이 들어와도 양쪽이
+# 같은 판단을 하게 하려는 것이다.
+#
+# 줄어드는 양 (실측, 배제 규칙까지 전부 적용한 뒤):
+#     80,313건 -> 38,058건   (42,255건 / 52.6% 감소)
+# 3초/건이면 재생 시간이 67시간 -> 32시간이다.
+#
+# 원본에 0 과 1.0 A 사이인 행은 한 건도 없다. 즉 걸러지는 것은 전부 정확히
+# 0 A 인 정지 행이고, 그중 대부분은 충전 완료(SOC 90) 후의 유지 구간이다
+# (예: 1018_chg 는 10,454행 중 9,497행이 그 구간이다).
+#
+# **주의 - 이 필터는 세션 경계 신호를 지운다.** 원본에는 충전 완료 후 20~160분씩
+# 정지 구간이 있고, 모델은 그 정지가 이어지는 것을 보고 "충전 세션이 끝났다"고
+# 판단해 상태를 비웠다(StreamGate.idle_reset_rows). 정지 행이 아예 오지 않으면
+# 그 신호가 사라지므로, api 쪽에서 measured_at 의 공백으로 같은 판단을 한다
+# (detector.SESSION_GAP_SECONDS). 한쪽만 바꾸면 안 된다.
+CURRENT_ON_AMPS = 1.0
 
 # 통일할 샘플링 주기(초).
 #
@@ -108,7 +146,7 @@ _BUCKET = f"(extract(epoch FROM measured_at)::bigint / {RESAMPLE_SECONDS})"
 
 
 def _where(serial_number: int | None, mode: str | None) -> tuple[str, dict]:
-    """배제 규칙 + 사용자 조건을 WHERE 절로 만든다.
+    """배제 규칙 + 통전 구간 + 사용자 조건을 WHERE 절로 만든다.
 
     DB 는 원시 데이터라 배제 대상이 그대로 살아 있다. 걸러내는 것이 여기 일이다.
     NULL <> 0 은 참이 아니므로, 불완전 행의 NULL 스칼라도 이 조건에서 함께 빠진다.
@@ -127,6 +165,10 @@ def _where(serial_number: int | None, mode: str | None) -> tuple[str, dict]:
     clauses += [f"{col} <> 0" for col in SENTINEL_ZERO]
     clauses += [f"{col} <> -40" for col in SENTINEL_MINUS40]
 
+    # 통전 구간만 발행한다(CURRENT_ON_AMPS 주석 참고). current 가 NULL 인
+    # 불완전 행도 NULL > 1.0 이 참이 아니라 여기서 함께 빠진다.
+    clauses.append("abs(current) > :current_on")
+
     # 회의에서 정한 구간 제외. 팩과 구간을 짝으로 봐야 하므로 mode 별로 나눈다.
     clauses += [
         "NOT (mode = 'chg' AND serial_number = ANY(:exclude_chg))",
@@ -137,6 +179,7 @@ def _where(serial_number: int | None, mode: str | None) -> tuple[str, dict]:
         "excluded": list(EXCLUDED_FILES),
         "exclude_chg": sorted(EXCLUDE_CHG),
         "exclude_dchg": sorted(EXCLUDE_DCHG),
+        "current_on": CURRENT_ON_AMPS,
     }
     if serial_number is not None:
         clauses.append("serial_number = :serial_number")

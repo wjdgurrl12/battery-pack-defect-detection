@@ -20,7 +20,9 @@ VS Code 라면 폴더를 연 뒤 **Reopen in Container** 를 누르면 `dev` 컨
 docker compose exec dev pytest
 ```
 
-파이썬/라이브러리, Postgres 읽고 쓰기, Kafka 발행→수신 왕복을 확인한다.
+두 벌이 돈다 — `test_smoke.py` 는 **환경**(파이썬/라이브러리, Postgres 읽고 쓰기,
+Kafka 발행→수신 왕복), `test_detector.py` 는 **모델**(번들 로드, 정상 팩 재현,
+결함 주입 시 지목)을 확인한다. 모델 쪽은 인프라 없이도 돈다.
 
 ## 서비스
 
@@ -46,11 +48,26 @@ docker compose exec dev pytest
 - 초기 스키마가 필요하면 `db/init/*.sql` 에 넣는다. Postgres 최초 기동 시 1회 실행되므로,
   이미 볼륨이 있으면 `docker compose down -v` 로 지워야 다시 적용된다.
 
-## 개발 시작점
+## 무엇이 들어 있나
 
-- `main.py` — `/health` 만 있는 FastAPI 껍데기
-- `app.py` — API 상태만 확인하는 Streamlit 껍데기
-- `src/battery_pack_defect_detection/` — 공용 모듈을 넣을 패키지
-- `tests/test_smoke.py` — 환경 확인용. 앱 테스트는 `tests/` 에 따로 추가한다
+```
+db/data/*.csv ─▶ Postgres ─▶ sensor_generator ─▶ Kafka(측정)
+                                                   ├─▶ api  판정(모델) ─▶ Kafka(판정)
+                                                   └─▶ streamlit  차트·타일·알림
+```
 
-의존성 추가, 이미지 갱신, 컨테이너가 안 뜰 때의 대처는 참고.
+- `main.py` — api. 측정을 구독해 모델로 판정하고 판정 토픽으로 발행한다
+- `app.py` — 대시보드. 판정은 하지 않고 받은 것만 칠한다
+- `src/battery_pack_defect_detection/` — 공용 패키지 (`consumer.py`, `detector.py`)
+- `battery_detector.py` + `src/step*.py` + `models/*.bundle` — 이상탐지 모델
+- `tests/test_smoke.py` — 환경 확인용 / `tests/test_detector.py` — 모델 확인용
+
+## 문서
+
+| | |
+|---|---|
+| [`docs/dev-environment.md`](docs/dev-environment.md) | **개발환경 전체** — 서비스·포트·환경변수·자주 쓰는 명령·함정 |
+| [`docs/pipeline-overview.md`](docs/pipeline-overview.md) | 파이프라인 동작 원리, 판정 로직, 주기 |
+| [`docs/kafka-message-spec.md`](docs/kafka-message-spec.md) | 측정 메시지 필드 명세 |
+| [`src/README.md`](src/README.md) | 모델팀 인수인계 문서 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 의존성 추가, 이미지 갱신, 컨테이너가 안 뜰 때 |

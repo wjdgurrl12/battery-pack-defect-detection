@@ -58,6 +58,14 @@ TEMPS_PER_MODULE = 2
 # database 를 import 하는데, 화면은 DB 에 붙지 않기 때문이다(docker-compose).
 KST = timezone(timedelta(hours=9))
 
+# 다루는 구간. 2026-08-26 결정으로 방전은 발행하지 않는다
+# (database.EXCLUDE_DCHG 가 전 팩을 뺀다). 화면도 충전 하나만 본다.
+MODE = "chg"
+
+# 팩 버튼이 '충전 중' 으로 보일 조건(초). 발행이 3초에 1건이라 그 세 배를 준다 -
+# 한두 건 늦는 것으로 '대기' 로 떨어지면 목록의 배지가 계속 깜빡인다.
+ACTIVE_WITHIN_SECONDS = 10
+
 # 판정 메시지의 state(영어) -> 화면 표기(한글)
 STATE_KO = {"anomaly": "이상", "warning": "주의", "normal": "정상"}
 
@@ -105,6 +113,16 @@ TONES = {
     "정상": (PALETTE["ok_fg"], PALETTE["ok_soft"]),
 }
 
+# 충전 진행 배지의 (전경, 배경). 판정색(TONES)과 **다른 축**이라는 점이 중요하다.
+# 한 버튼에 배지가 둘 붙으므로, 둘이 같은 색을 쓰면 어느 쪽이 무슨 뜻인지 섞인다.
+#   진행 = 파랑 계열(액션색) + 중립,  판정 = 의미색(빨강/주황/초록)
+# '충전 완료' 만 초록을 쓰는데, 이건 '끝났다' 를 알리는 자리라 의미색이 맞다.
+CHARGE_TONES = {
+    "충전 완료": (PALETTE["ok_fg"], PALETTE["ok_soft"]),
+    "충전 중": (PALETTE["select"], PALETTE["info_soft"]),
+    "대기": (PALETTE["muted"], PALETTE["line"]),
+}
+
 st.set_page_config(page_title="배터리팩 품질검사 모니터링",
                    layout="wide", initial_sidebar_state="collapsed")
 
@@ -147,6 +165,22 @@ def window_frame(measurements: kc.MeasurementBuffer, serial: int, mode: str,
     return pd.DataFrame(measurements.rows(serial, mode, limit=size))
 
 
+def target_label(module: int | None, cell: int | None, empty: str = "지목 없음") -> str:
+    """판정이 짚은 곳 -> 'M08 CV01' / 'M05' / '지목 없음'.
+
+    **module 과 cell 은 따로 비어 있을 수 있다.** 불량 유형마다 짚는 단위가
+    다르기 때문이다 - 용량불량·센싱와이어불량은 셀까지, 용접불량은 모듈까지,
+    센서불량은 온도 센서를 짚는다(모듈만 남는다). 정상이면 둘 다 없다.
+
+    한곳에 모아 둔 이유: 예전에 도넛 캡션이 module 하나만 확인하고 두 값을
+    함께 찍어서, 셀 없는 알람이 처음 뜨는 순간 화면 전체가 죽었다.
+    같은 조합을 세 곳에서 따로 쓰고 있었던 것이 원인이다.
+    """
+    if module is None:
+        return empty
+    return f"M{module:02d}" if cell is None else f"M{module:02d} CV{cell:02d}"
+
+
 def seconds_ago(iso: str | None) -> str:
     """ISO 시각 -> 'n초 전' 표기. 수신이 살아 있는지 한눈에 보이게 한다."""
     if iso is None:
@@ -168,9 +202,27 @@ st.markdown(f"""
   html, body, .stApp, [class*="css"] {{
       font-family:'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo',
                   'Noto Sans KR', sans-serif; }}
-  .stApp {{ background:{PALETTE['bg']}; color:{PALETTE['ink']}; }}
-  .block-container {{ padding:1.6rem 2rem 3rem; max-width:1500px; }}
+  /* 좌우를 표면으로 가른다.
+     본문이 Canvas White, 왼쪽 레일이 Surface Grey 다. DESIGN.md 의 두 표면을
+     그대로 쓰되 자리를 바꾼 것이라 새 색을 만들지 않았다.
+     선 하나로 나누는 것보다 표면이 다른 편이 확실하다 - 레일 안의 흰 카드가
+     '레일 위에 얹힌 것' 으로 읽히고, 본문의 흰 카드는 헤어라인으로만 떠오른다. */
+  .stApp {{ background:{PALETTE['card']}; color:{PALETTE['ink']}; }}
+  .block-container {{ padding:0 2rem 3rem 0; max-width:1600px; }}
   #MainMenu, footer, header {{ visibility:hidden; }}
+
+  /* 왼쪽 레일. 화면 끝까지 내려가야 '기둥' 으로 보이므로 최소 높이를 준다. */
+  .st-key-rail {{
+      background:{PALETTE['bg']};
+      border-right:1px solid {PALETTE['line']};
+      border-radius:0;
+      padding:1.6rem 1.15rem 2rem;
+      margin:0; min-height:calc(100vh - 2rem); }}
+  /* 본문 열은 레일과 같은 높이에서 시작한다 */
+  .st-key-body {{ padding:1.6rem 0 0 .6rem; border:none; }}
+
+  /* 레일 안의 구분선. 날짜 / 팩 목록 / 차트 구간 / 수신 현황을 나눈다 */
+  .rule {{ height:1px; background:{PALETTE['line']}; margin:1.1rem 0 .9rem; }}
 
   .hdr {{ display:flex; justify-content:space-between; align-items:baseline;
           margin-bottom:1.1rem; }}
@@ -201,13 +253,21 @@ st.markdown(f"""
       background:{PALETTE['card']}; border:1px solid {PALETTE['line']};
       border-radius:12px; padding:.8rem .9rem; box-shadow:none; }}
 
-  /* 팩 선택 버튼: 8px 컨트롤, 헤어라인 테두리 */
+  /* 버튼 공통: 8px 컨트롤, 헤어라인 테두리.
+     높이를 키운 이유는 목업과 같다 - 레일에서 한 줄이 손가락 하나 폭은 돼야
+     스캔이 된다. 44px 은 터치 타깃 하한이기도 하다.
+
+     폭은 여기서 정하지 않는다. st.button 의 기본이 width='content' 라
+     Streamlit 쪽 규칙이 이겨서, CSS 로 width:100% 를 줘도 상자는 글자
+     크기 그대로다(가상 요소로 붙인 글자가 상자 밖으로 새는 원인이었다).
+     부르는 쪽에서 width="stretch" 를 넘긴다. 아래 100% 는 그 보조다. */
   div[data-testid="stButton"] > button {{
-      width:100%; text-align:left; justify-content:flex-start;
+      width:100%; text-align:center; justify-content:center;
       background:{PALETTE['card']}; color:{PALETTE['ink']};
       border:1px solid {PALETTE['line']};
-      border-radius:8px; padding:.5rem .7rem; margin:0 0 .35rem;
-      font-size:.88rem; font-weight:500; line-height:1.4;
+      border-radius:8px; padding:.7rem .8rem; margin:0 0 .45rem;
+      min-height:2.75rem;
+      font-size:.95rem; font-weight:500; line-height:1.4;
       white-space:normal; box-shadow:none;
       transition:border-color 120ms, background 120ms; }}
   div[data-testid="stButton"] > button:hover {{
@@ -225,7 +285,9 @@ st.markdown(f"""
       background:{PALETTE['select']}; color:{PALETTE['card']};
       border-color:{PALETTE['select']}; }}
 
-  .st-key-packbox {{ border:none; padding:0; }}
+  /* 팩 목록 스크롤 영역. 레일 위에 얹히므로 자기 표면을 갖지 않는다 -
+     기본 테두리·배경을 지워야 레일의 회색이 그대로 비친다. */
+  .st-key-packbox {{ border:none; padding:0; background:transparent; }}
 
   /* 선택 상자도 8px 컨트롤 규격에 맞춘다 */
   div[data-baseweb="select"] > div {{
@@ -248,75 +310,135 @@ def render_header(serial: int, mode: str) -> None:
     </div>""", unsafe_allow_html=True)
 
 
-def render_sidebar(packs: pd.DataFrame) -> tuple[int, str]:
+def charge_state(latest: dict | None) -> str:
+    """팩 하나의 충전 진행 상태. '충전 완료' / '충전 중' / '대기'.
+
+    만충을 **먼저** 본다. 만충에 닿은 뒤에도 측정은 계속 들어오므로(실측:
+    usoc_avg 가 100 인 충전 행이 183,648건), 수신 여부를 먼저 보면 이미 끝난
+    팩이 영영 '충전 중' 으로 남는다.
+
+    '대기' 는 두 경우를 함께 가리킨다 - 측정이 아직 한 건도 안 온 팩과,
+    예전에 받았지만 지금은 스트림이 지나가 버린 팩이다. 화면 입장에서는
+    '지금 진행 중이 아니다' 로 같으므로 굳이 나누지 않는다.
+    """
+    if latest is None:
+        return "대기"
+    if float(latest["usoc_avg"]) >= 100:
+        return "충전 완료"
+
+    # produced_at 은 generator 가 발행한 실제 시각(UTC)이다. measured_at 은
+    # 2020~2021년 원본 시각이라 '지금 들어오는 중인가' 를 볼 수 없다.
+    idle = (datetime.now(timezone.utc)
+            - datetime.fromisoformat(latest["produced_at"])).total_seconds()
+    return "충전 중" if idle <= ACTIVE_WITHIN_SECONDS else "대기"
+
+
+def render_sidebar(packs: pd.DataFrame, measurements: kc.MeasurementBuffer,
+                   verdicts: kc.VerdictBuffer) -> tuple[int, str]:
     """왼쪽 열: 날짜 카드 + 검사 대상 팩 선택. 고른 (serial, mode) 를 돌려준다.
 
     라디오 대신 버튼을 쓴다. 라디오는 동그라미를 CSS 로 숨겨야 하는데
     Streamlit 이 내부 DOM 을 바꾸면 그 셀렉터가 깨진다. 버튼은 숨길 것이
     없고 kind="primary" 로 선택 상태를 그대로 표현할 수 있다.
+
+    2026-08-26 결정으로 방전은 다루지 않는다(database.EXCLUDE_DCHG). 충전/방전
+    선택 컨트롤이 사라졌고, 팩 하나가 한 줄을 통째로 쓴다. 버튼에는 팩 번호와
+    상태 배지 둘이 들어간다 - 충전 진행(충전 중/충전 완료/대기)과 판정(정상/
+    주의/이상)이다. 스텝 수는 뺐다.
     """
     # naive 한 datetime.now() 를 쓰면 컨테이너의 UTC 가 그대로 찍힌다.
     now = datetime.now(KST)
     weekday = "월화수목금토일"[now.weekday()]
+    # 흰 카드에 담지 않는다 - 레일 자체가 이미 표면이라, 그 위에 또 표면을
+    # 얹으면 '카드 안의 카드' 가 된다. 목업처럼 글자만 두고 아래를 선으로 끊는다.
     st.markdown(
-        '<div class="card wx" style="margin-bottom:.7rem;">'
+        '<div class="wx">'
         f'<div class="d">{now.year}년 {now.month}월 {now.day}일 ({weekday})</div>'
+        '<div class="d" style="margin-top:.5rem;">현재 시각</div>'
         f'<div class="t">{now:%H:%M}</div>'
-        '<div class="d">라인 가동 07:00 –</div></div>',
+        '<div class="d">라인 가동 07:00 –</div></div>'
+        '<div class="rule"></div>',
         unsafe_allow_html=True)
 
-    st.markdown('<div class="cap" style="margin:.2rem 0 .3rem;">검사 대상 팩</div>',
+    st.markdown('<div class="cap" style="margin:0 0 .5rem;">검사 대상 팩</div>',
                 unsafe_allow_html=True)
 
-    # 100구간을 한 줄로 늘어놓으면 고르기 어렵다. 충전/방전을 먼저 나눈다.
-    mode = st.segmented_control(
-        "구간", ["chg", "dchg"], default="chg",
-        format_func=lambda m: "충전" if m == "chg" else "방전",
-        label_visibility="collapsed") or "chg"
-    subset = packs[packs["mode"] == mode]
+    # 충전만 남긴다. DB 쪽에서 이미 방전을 빼지만, 그 전에 발행돼 토픽에 남아
+    # 있는 방전 메시지는 컨슈머가 earliest 부터 읽으므로 여전히 도착한다.
+    # 화면에서 한 번 더 거르지 않으면 없앤 구간이 목록에 살아난다.
+    subset = packs[packs["mode"] == MODE]
 
-    # 아직 이 구간(충전/방전)의 메시지가 안 왔을 수 있다. 재생 순서가
-    # 충전 전량 -> 방전 전량이라, 초반에는 방전 목록이 비어 있는 게 정상이다.
     if subset.empty:
         st.markdown('<div class="cap" style="margin:.4rem 0;">'
-                    '이 구간의 측정이 아직 도착하지 않았습니다</div>',
+                    '충전 측정이 아직 도착하지 않았습니다</div>',
                     unsafe_allow_html=True)
-        other = packs.iloc[0]
-        st.session_state.pack = (int(other.serial_number), other.mode)
-        return st.session_state.pack
+        return st.session_state.get("pack", (None, MODE))
 
-    first = (int(subset.iloc[0].serial_number), mode)
-    if st.session_state.get("pack", (None, None))[1] != mode:
-        st.session_state.pack = first
+    serials = [int(r.serial_number) for r in subset.itertuples(index=False)]
 
-    # 버튼 라벨은 한 줄만 지원한다(마크다운 줄바꿈이 무시된다). 대신
-    # st.button 의 key 가 만들어 주는 st-key-* 클래스에 ::after 로
-    # 두 번째 줄을 붙인다.
-    rules = "".join(
-        f'.st-key-pk-{r.mode}-{r.serial_number} button::after'
-        f'{{content:"{r.steps:,} 스텝";}}'
-        for r in subset.itertuples(index=False))
+    # 고른 팩이 아직 없거나 목록에서 사라졌으면 첫 팩으로 되돌린다.
+    #
+    # 팩 번호만 보면 안 된다. 방전을 없애기 전에 열어 둔 탭에는 session_state 에
+    # (1005, 'dchg') 같은 값이 남아 있는데, 번호 1005 는 충전 목록에도 있어서
+    # 그대로 통과해 버린다. 그러면 화면이 없앤 방전 구간을 계속 그린다.
+    if st.session_state.get("pack") not in {(s, MODE) for s in serials}:
+        st.session_state.pack = (serials[0], MODE)
+
+    # 라벨은 'PACK 1000 · 정상' 한 줄이다(목업).
+    #
+    # **상태 글자를 ::after 로 붙이지 않는다.** 그렇게 했더니 글자가 버튼 밖으로
+    # 삐져나왔다. 원인은 Streamlit 의 st.button 이 기본으로 width='content' 라
+    # 버튼 상자가 라벨 크기에 맞춰지고, 나중에 CSS 로 붙인 가상 요소는 그 계산에
+    # 들어가지 않아서다. 라벨 안에 넣으면 상자가 처음부터 그만큼 잡힌다.
+    # (폭은 아래 st.button(width="stretch") 로 열에 꽉 채운다)
+    #
+    # 상태 한 자리에 무엇을 넣는가: **판정이 있으면 판정, 없으면 충전 진행**이다.
+    # 목업의 'PACK 1004 · 대기' 가 그 경우다 - 측정은 왔는데 아직 판정 전.
+    labels, rules = {}, []
+    for serial in serials:
+        target = f'.st-key-pk-{serial} div[data-testid="stButton"] > button'
+
+        # 판정이 아직 없을 수 있다. 측정이 먼저 오고 판정은 api 를 거쳐 오므로
+        # 켠 직후 잠깐은 비는 것이 정상이다.
+        verdict = verdicts.latest_for(serial, MODE)
+        charge = charge_state(measurements.latest(serial, MODE))
+        if verdict is not None:
+            state = STATE_KO[verdict["state"]]
+        else:
+            state = charge if charge != "충전 완료" else "판정 전"
+        labels[serial] = f"PACK {serial} · {state}"
+
+        # 색은 봐야 할 것에만 준다. 전부 칠하면(정상까지 초록) 목록이 알록달록해져
+        # 정작 빨간 줄이 안 띈다. 정상·판정 전은 중립으로 두고 주의/이상만 틴트를 깐다.
+        if state in ("주의", "이상"):
+            fg, bg = TONES[state]
+            rules.append(f'{target}:not([kind="primary"]){{background:{bg};'
+                         f'color:{fg};border-color:{PALETTE["strong"]};}}')
+            rules.append(f'{target}:not([kind="primary"]) p{{color:{fg};}}')
+
+        # 지금 충전 중인 팩은 왼쪽 모서리에 굵은 선을 준다. 판정(색)과 다른 축이라
+        # 겹쳐도 안 헷갈리고, 라벨 폭을 건드리지 않아 삐져나올 일이 없다.
+        if charge == "충전 중":
+            rules.append(f'{target}{{border-left:3px solid {PALETTE["action"]};}}')
+
     st.markdown(
         "<style>"
-        'div[data-testid="stButton"] > button::after {'
-        "  display:block; width:100%; margin-top:.15rem;"
-        "  font-size:.7rem; font-weight:400; opacity:.7; }"
-        f"{rules}</style>", unsafe_allow_html=True)
+        # 팩 번호(마크다운 <p>). button 에만 크기를 주면 <p> 가 자기 값을
+        # 들고 있어 상속되지 않으므로 안쪽 요소를 직접 짚는다.
+        '[class*="st-key-pk-"] div[data-testid="stButton"] > button p{'
+        "font-size:.95rem;font-weight:600;line-height:1.4;white-space:nowrap;}"
+        + "".join(rules) + "</style>", unsafe_allow_html=True)
 
-    # 팩을 2열로 늘어놓는다. 한 줄에 하나씩이면 목록이 지나치게 길어진다.
-    # container(height=...) 가 스크롤 영역을 만들어 준다.
+    # 한 줄에 하나씩이라 목록이 길다. container(height=) 가 스크롤 영역을 만든다.
     with st.container(height=360, key="packbox"):
-        rows = list(subset.itertuples(index=False))
-        for start in range(0, len(rows), 2):
-            for col, row in zip(st.columns(2, gap="small"), rows[start:start + 2]):
-                with col:
-                    key = (int(row.serial_number), row.mode)
-                    if st.button(f"**PACK {row.serial_number}**",
-                                 key=f"pk-{row.mode}-{row.serial_number}",
-                                 type="primary" if key == st.session_state.pack
-                                      else "secondary"):
-                        st.session_state.pack = key
-                        st.rerun()
+        for serial in serials:
+            # width="stretch" 가 핵심이다. 기본값 'content' 면 버튼이 글자
+            # 크기로 쪼그라들어 목록이 들쭉날쭉해진다.
+            if st.button(labels[serial], key=f"pk-{serial}", width="stretch",
+                         type="primary" if serial == st.session_state.pack[0]
+                              else "secondary"):
+                st.session_state.pack = (serial, MODE)
+                st.rerun()
 
     return st.session_state.pack
 
@@ -409,7 +531,20 @@ def render_donut(verdict: dict | None, window: pd.DataFrame, mode: str) -> None:
     # SoC 가 어느 쪽으로 흐르는지. 충전은 만충(100%)에서, 방전은 하한(6%)
     # 에서 구간이 끝나므로 이 한 줄이 '얼마나 남았는지' 를 대신한다.
     # 하한 6% 는 데이터에서 관측된 값이라 상수로 박지 않고 방향만 적는다.
-    heading = "충전 중 ↑" if mode == "chg" else "방전 중 ↓"
+    #
+    # 만충에 닿으면 방향 대신 도착을 알린다. 화살표는 '아직 가는 중' 이라는
+    # 뜻이라, 100% 에 멈춰 선 뒤에도 계속 ↑ 를 띄우면 진행이 멎은 것처럼 읽힌다.
+    #
+    # 조건을 mode == "chg" 안에 둔 것이 중요하다. usoc_avg 는 방전 구간의
+    # '시작' 이 100 이라(실측 7,872행), 모드를 안 보고 100 만 보면 방전이
+    # 시작되자마자 '충전 완료' 가 뜬다.
+    #
+    # 경계를 >= 100 으로 잡은 근거: usoc_avg 는 실측 최댓값이 정확히 100 이고
+    # 충전 183,648행이 그 값에 닿는다(51팩 중 49팩). 근사 비교가 필요 없다.
+    if mode == "chg":
+        heading = "충전 완료" if usoc >= 100 else "충전 중 ↑"
+    else:
+        heading = "방전 중 ↓"
 
     # 판정 상태와 지목. 판정 전이면 대기로 둔다.
     if verdict is None:
@@ -417,8 +552,7 @@ def render_donut(verdict: dict | None, window: pd.DataFrame, mode: str) -> None:
     else:
         state = STATE_KO[verdict["state"]]
         tone = TONES[state]
-        target = (f"M{verdict['module']:02d} CV{verdict['cell']:02d}"
-                  if verdict["module"] is not None else "지목 없음")
+        target = target_label(verdict["module"], verdict["cell"])
 
     st.markdown(
         f"""<div style="text-align:center;font-size:.82rem;
@@ -429,7 +563,7 @@ def render_donut(verdict: dict | None, window: pd.DataFrame, mode: str) -> None:
               &nbsp;{target}
               <div style="margin-top:.35rem;color:{PALETTE['ink']};
                           font-variant-numeric:tabular-nums;">
-                seq {int(latest['seq']):,} · {heading}</div>
+                {heading}</div>
             </div>""", unsafe_allow_html=True)
 
 
@@ -460,13 +594,19 @@ def render_module_grid(verdict: dict | None, default: int) -> int:
     def sel(m: int) -> str:
         return f'.st-key-mod-{m:02d} div[data-testid="stButton"] > button'
 
-    rules = []
+    # 타일 16개 전부에 상태를 쓴다 - 짚힌 곳만 그 상태, 나머지는 '정상'.
+    #
+    # 여기서 '정상' 은 **그 모듈이 원인으로 지목되지 않았다**는 뜻이다. 모델은
+    # 모듈을 하나씩 판정하지 않고 팩 하나를 판정한 뒤 원인 모듈 하나를 짚는다.
+    # 그래서 팩이 '이상' 이어도 나머지 15개는 '정상'(= 원인 아님)으로 둔다.
+    # 짚힌 곳에만 의미색 틴트가 들어가므로, 어디를 봐야 하는지는 색이 말해 준다.
+    labels, rules = {}, []
     for m in range(MODULE_COUNT):
         target = sel(m)
         marked = m == flagged
-        # 둘째 줄은 짚힌 타일에만 상태를 쓴다. 나머지는 빈칸(CSS 의 \00a0,
-        # 곧 nbsp)을 넣어 높이를 맞춘다 - 비우면 그 타일만 한 줄 낮아진다.
-        label = flagged_state if marked else "\\00a0"
+        # 상태 글자를 라벨에 넣는다. ::after 로 붙이면 버튼 폭 계산에 안 들어가
+        # 글자가 상자 밖으로 삐져나온다(팩 버튼에서 겪은 것과 같은 이유).
+        labels[m] = f"M{m + 1:02d} · {flagged_state if marked else '정상'}"
 
         if m == st.session_state.module:
             # 선택: Active Blue 로 채우고 글씨는 흰색
@@ -474,7 +614,7 @@ def render_module_grid(verdict: dict | None, default: int) -> int:
             rules.append(f'{target},{target}:hover,{target}:focus'
                          f'{{background:{blue};border-color:{blue};'
                          f'color:{white};font-weight:600;}}')
-            rules.append(f'{target}::after{{content:"{label}";color:{white};}}')
+            rules.append(f'{target} p{{color:{white};}}')
         else:
             # 상태는 의미색 틴트로, 선택은 Active Blue 로 보인다. 두 신호가
             # 서로 다른 축을 쓰므로 겹쳐도 헷갈리지 않는다.
@@ -483,27 +623,56 @@ def render_module_grid(verdict: dict | None, default: int) -> int:
             edge = PALETTE["strong"] if marked else PALETTE["line"]
             rules.append(f'{target}{{background:{fill};border-color:{edge};'
                          f'color:{fg};}}')
+            rules.append(f'{target} p{{color:{fg};}}')
             rules.append(f'{target}:hover{{background:{fill};'
                          f'border-color:{PALETTE["select"]};color:{fg};}}')
-            rules.append(f'{target}::after{{content:"{label}";color:{fg};}}')
 
     st.markdown(
         "<style>"
         # 모듈 타일: 가로로 길게. 정사각형이면 글자가 줄바꿈된다.
+        #
+        # 커서를 올리면 타일이 커진다. transform 은 레이아웃을 건드리지 않아서
+        # (width/padding 과 달리) 옆 타일 16개가 밀리지 않는다 - 그리는 단계에서만
+        # 확대되므로 격자가 그대로 있고 커진 타일이 이웃 위로 살짝 덮인다.
+        # 덮는 쪽이 위로 오도록 z-index 를 같이 올린다. 안 그러면 뒤 타일에 가린다.
         '[class*="st-key-mod-"] div[data-testid="stButton"] > button{'
-        "text-align:center;justify-content:center;white-space:nowrap;"
-        "padding:.65rem 1.1rem;min-height:0;height:auto;"
-        "font-size:.88rem;line-height:1.2;border-radius:8px;margin:0 0 .4rem;}"
-        # 둘째 줄(상태 글자). 숫자였을 때보다 작게 - 한글 두 글자가 들어간다.
-        '[class*="st-key-mod-"] div[data-testid="stButton"] > button::after{'
-        "display:block;width:100%;text-align:center;white-space:nowrap;"
-        "font-size:.82rem;font-weight:600;opacity:1;margin-top:.15rem;}"
+        "display:flex;align-items:center;"
+        "text-align:center;justify-content:center;white-space:nowrap;gap:0;"
+        "padding:.85rem .6rem;min-height:3.4rem;height:auto;"
+        "font-size:1rem;font-weight:600;line-height:1.3;"
+        "border-radius:8px;margin:0 0 .6rem;"
+        "position:relative;z-index:0;transform-origin:center center;"
+        "transition:transform 120ms ease, border-color 120ms, background 120ms;}"
+        # 첫 줄(M01) 은 button 이 아니라 그 안의 <p> 에 그려진다. Streamlit 이
+        # 버튼 라벨을 마크다운으로 렌더하기 때문이다:
+        #     <button><div data-testid="stMarkdownContainer"><p>M01</p></div></button>
+        # 그 <p> 가 자기 font-size 를 들고 있어서, button 에만 크기를 주면
+        # 상속되지 않고 무시된다. 실제로 이전 값 .88rem 은 Streamlit 기본값
+        # 14px(.875rem)과 거의 같아 '먹는 것처럼' 보였을 뿐이다.
+        # 그래서 안쪽 요소까지 직접 짚는다. ::after(둘째 줄)는 button 에 붙는
+        # 가상 요소라 위 규칙을 그대로 받으므로 여기 낄 필요가 없다.
+        '[class*="st-key-mod-"] div[data-testid="stButton"] > button p,'
+        '[class*="st-key-mod-"] div[data-testid="stButton"] > button div{'
+        "font-size:1rem;font-weight:600;line-height:1.3;white-space:nowrap;}"
+        # 확대는 여기 한 곳에서만 정한다. 아래 rules 의 :hover 는 색만 바꾸므로
+        # 서로 다른 속성이라 겹쳐도 둘 다 적용된다(선택된 파란 타일도 함께 커진다).
+        '[class*="st-key-mod-"] div[data-testid="stButton"] > button:hover{'
+        "transform:scale(1.09);z-index:5;}"
+        # 움직임을 줄여 달라고 설정한 사용자에게는 확대를 하지 않는다.
+        # 색과 테두리 변화는 그대로라 어느 타일 위인지는 여전히 보인다.
+        "@media (prefers-reduced-motion: reduce){"
+        '[class*="st-key-mod-"] div[data-testid="stButton"] > button{'
+        "transition:border-color 120ms, background 120ms;}"
+        '[class*="st-key-mod-"] div[data-testid="stButton"] > button:hover{'
+        "transform:none;}}"
         + "".join(rules) + "</style>", unsafe_allow_html=True)
 
     for half in (0, 8):
         for col, m in zip(st.columns(8, gap="small"), range(half, half + 8)):
             with col:
-                if st.button(f"M{m + 1:02d}", key=f"mod-{m:02d}"):
+                # width="stretch" 가 없으면 버튼이 글자 크기로 쪼그라들어
+                # 열 안에서 가운데도 아니고 왼쪽에 붙은 작은 상자가 된다.
+                if st.button(labels[m], key=f"mod-{m:02d}", width="stretch"):
                     st.session_state.module = m
                     st.rerun()
 
@@ -617,14 +786,27 @@ def render_pipeline_status(measurements: kc.MeasurementBuffer,
     """
     ms, vs = measurements.stats(), verdicts.stats()
     by = vs["by_state"]
+    # 흰 카드에 담지 않는다 - 레일 위에서는 표면을 겹치지 않고 선으로 끊는다.
+    # 두 수를 나란히 크게 두는 이유: 이 둘이 벌어지는 것이 파이프라인이 새고
+    # 있다는 첫 신호라, 나란히 놓아야 차이가 눈에 띈다.
     st.markdown(f"""
-    <div class="card" style="margin-top:.9rem;font-size:.8rem;line-height:1.9;">
-      <div class="cap">파이프라인 수신 현황</div>
-      <div>측정&nbsp; <b style="font-variant-numeric:tabular-nums;">{ms['received']:,}</b>건
-           · {seconds_ago(ms['last_at'])}</div>
-      <div>판정&nbsp; <b style="font-variant-numeric:tabular-nums;">{vs['received']:,}</b>건
-           · {seconds_ago(vs['last_at'])}</div>
-      <div style="color:{PALETTE['muted']};">
+    <div style="font-size:.8rem;line-height:1.6;">
+      <div class="cap" style="margin-bottom:.5rem;">파이프라인 수신 현황</div>
+      <div style="display:flex;gap:1.6rem;">
+        <div>
+          <div style="color:{PALETTE['muted']};">측정</div>
+          <div style="font-size:1.5rem;font-weight:800;line-height:1.3;
+                      font-variant-numeric:tabular-nums;">{ms['received']:,}</div>
+          <div style="color:{PALETTE['faint']};">{seconds_ago(ms['last_at'])}</div>
+        </div>
+        <div>
+          <div style="color:{PALETTE['muted']};">판정</div>
+          <div style="font-size:1.5rem;font-weight:800;line-height:1.3;
+                      font-variant-numeric:tabular-nums;">{vs['received']:,}</div>
+          <div style="color:{PALETTE['faint']};">{seconds_ago(vs['last_at'])}</div>
+        </div>
+      </div>
+      <div style="color:{PALETTE['muted']};margin-top:.6rem;">
         이상 {by.get('anomaly', 0)} · 주의 {by.get('warning', 0)}
         · 정상 {by.get('normal', 0)}
         · 유실 {ms['gaps']} · 중복 {ms['duplicates']}</div>
@@ -674,11 +856,15 @@ def dashboard() -> None:
     measurements, verdicts = kafka_feeds()
     sections = measurements.sections()
 
-    side, body = st.columns([1, 3.4], gap="medium")
+    # gap="small" 로 좁힌 이유: 열 사이를 벌리는 대신 레일의 표면과 오른쪽
+    # 경계선이 구분을 맡는다. 여백까지 넓으면 두 번 나누는 셈이라 헐거워진다.
+    side, body = st.columns([1, 3.6], gap="small")
 
     # ---- 아직 아무 측정도 안 왔을 때: 시작 안내 ----
     if not sections:
-        with body:
+        with side, st.container(key="rail"):
+            render_pipeline_status(measurements, verdicts)
+        with body, st.container(key="body"):
             st.markdown('<div class="hdr"><h1>배터리팩 품질검사 모니터링</h1>'
                         '<div class="meta">Kafka 수신 대기 중</div></div>',
                         unsafe_allow_html=True)
@@ -686,18 +872,17 @@ def dashboard() -> None:
                     "몇 초 안에 화면이 채워집니다.")
             st.code("docker compose exec dev python sensor_generator.py --limit 100",
                     language="bash")
-        with side:
-            render_pipeline_status(measurements, verdicts)
         return
 
     packs = pd.DataFrame(sections)
 
-    # ---- 왼쪽: 팩 선택 / 차트 창 / 수신 현황 ----
-    with side:
-        serial, mode = render_sidebar(packs)
+    # ---- 왼쪽 레일: 팩 선택 / 차트 창 / 수신 현황 ----
+    with side, st.container(key="rail"):
+        serial, mode = render_sidebar(packs, measurements, verdicts)
 
-        st.markdown('<div class="cap" style="margin:.7rem 0 -.5rem;">'
-                    '차트 표시 구간</div>', unsafe_allow_html=True)
+        st.markdown('<div class="rule"></div>'
+                    '<div class="cap" style="margin:0 0 -.5rem;">'
+                    '차트 표시 구간\n\n</div>', unsafe_allow_html=True)
         span = st.selectbox(
             "차트 표시 구간", list(WINDOW_CHOICES),
             index=list(WINDOW_CHOICES).index(WINDOW_DEFAULT),
@@ -705,6 +890,7 @@ def dashboard() -> None:
             help="차트가 스트림의 끝에서 뒤로 얼마만큼을 보여줄지 정한다. "
                  "데이터가 5초 간격이라 '10분' 은 120건이다.")
 
+        st.markdown('<div class="rule"></div>', unsafe_allow_html=True)
         render_pipeline_status(measurements, verdicts)
 
     # ---- 데이터 꺼내기: 측정은 차트로, 판정은 타일·카드로 ----
@@ -722,7 +908,7 @@ def dashboard() -> None:
         st.session_state.module_for = (serial, mode)
 
     # ---- 오른쪽 본문 ----
-    with body:
+    with body, st.container(key="body"):
         render_header(serial, mode)
 
         top_left, top_right = st.columns([2, 1], gap="medium")

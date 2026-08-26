@@ -19,12 +19,17 @@
     "producer": {
       "service": "sensor generator (sensor_generator.py)",
       "acks": "all",
-      "note": "재생 순서는 mode 우선 - 충전 전량(50구간)을 보낸 뒤 방전 전량(50구간)을 보낸다. 실제 시험이 충전을 전부 끝내고 방전으로 넘어가는 방식이라 이를 재현한 것이다. 개발 단계의 발행 주기는 3초/건이며, 데이터의 측정 간격(5초)과는 별개다. 전량 125,488건이면 약 4.4일이 걸린다."
+      "note": "재생 순서는 충전만 - 방전 50구간은 EXCLUDE_DCHG 로 전량 제외했다(2026-08-26). 발행 대상은 통전 구간(abs(current) > 1.0 A)뿐이며, 정지 행 42,255건이 빠져 38,058건이 나간다. 개발 단계의 발행 주기는 3초/건이고 데이터의 측정 간격(5초)과는 별개다. 전량이면 약 32시간이 걸린다."
     },
     "consumers": [
       {
         "service": "api",
         "group_id": "api-measurement-consumer",
+        "auto_offset_reset": "earliest"
+      },
+      {
+        "service": "streamlit",
+        "group_id": "streamlit-dashboard-<uuid8>",
         "auto_offset_reset": "earliest"
       }
     ],
@@ -127,7 +132,9 @@
     "cell_minmax_skew": "v_min/v_max 는 BMS 가 보고한 값이라 voltages 배열의 min/max 와 항상 같지는 않다. 대부분 +-1mV 이내지만 최대 64mV 어긋나는 행이 있다. 정밀 계산이 필요하면 voltages 에서 직접 구하라.",
     "mode_origin": "mode 는 CSV 안에 없고 파일명에만 있다. 적재 스크립트가 붙여 줘야 하는 값이다.",
     "timezone": "원본 Date/Time 에 시간대가 없다. KST(+09:00) 로 간주해 오프셋을 붙여 발행한다.",
-    "array_order": "voltages[m][c] 는 M{m+1:02d}CV{c+1:02d}, values[m][s] 는 M{m+1:02d}T{s+1:02d} 에 대응한다. 즉 바깥 인덱스가 모듈(0~15), 안쪽이 셀(0~10) / 센서(0~1) 이다."
+    "array_order": "voltages[m][c] 는 M{m+1:02d}CV{c+1:02d}, values[m][s] 는 M{m+1:02d}T{s+1:02d} 에 대응한다. 즉 바깥 인덱스가 모듈(0~15), 안쪽이 셀(0~10) / 센서(0~1) 이다.",
+    "energized_only": "**통전 구간만 발행한다**(2026-08-26). database.py 가 abs(current) > 1.0 A 인 행만 읽는다(CURRENT_ON_AMPS). 기준값은 모델의 통전 판정과 같다. 전수 검사에서 0 < abs(current) <= 1.0 인 행은 한 건도 없었으므로, 실제로 빠지는 것은 정확히 0 A 인 정지 행이고 대부분 충전 완료(SOC 90) 후의 유지 구간이다. **부작용:** 정지 행이 오지 않으면 컨슈머가 '충전 세션이 끝났다'를 알아챌 수 없다. api 는 measured_at 공백이 300초를 넘으면 새 세션으로 본다(detector.SESSION_GAP_SECONDS).",
+    "no_discharge_inside_chg": "**충전 파일 안에 방전(양수 전류) 구간은 없다.** *_chg.csv 51개 전수 검사에서 전류 최댓값이 전부 0.0 이다. 충전 중간에 '전류가 갑자기 떨어지는' 것으로 보이는 구간은 방전이 아니라 0 A 정지다(1004_chg 는 SOC 60.8% 에서 0.4분, 1005_chg 는 SOC 32.3% 에서 1.4분). 300초 미만이라 같은 충전 세션으로 이어서 판정한다."
   },
   "type": "object",
   "additionalProperties": false,

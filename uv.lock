@@ -72,6 +72,7 @@ source = { editable = "." }
 dependencies = [
     { name = "confluent-kafka" },
     { name = "fastapi" },
+    { name = "numpy" },
     { name = "pandas" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "requests" },
@@ -90,10 +91,11 @@ dev = [
 requires-dist = [
     { name = "confluent-kafka", specifier = ">=2.6" },
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "numpy", specifier = ">=2.3.5" },
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.2" },
     { name = "requests", specifier = ">=2.34.2" },
-    { name = "scikit-learn", specifier = ">=1.9.0" },
+    { name = "scikit-learn", specifier = "==1.9.0" },
     { name = "sqlalchemy", specifier = ">=2.0.52" },
     { name = "streamlit", specifier = ">=1.61.1" },
     { name = "uvicorn", specifier = ">=0.52.1" },
