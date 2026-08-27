@@ -7,15 +7,15 @@ requires-python = ">=3.13"
 dependencies = [
     "confluent-kafka>=2.6",
     "fastapi>=0.141.1",
-    # 모델이 직접 쓴다(battery_detector.py, src/step*.py). pandas 가 끌어오긴 하지만
-    # 전처리·피처 계산이 전부 numpy 라 전이 의존으로 두지 않는다.
+    # 모델이 직접 쓴다(battery_anomaly.py, pack_loader.py). pandas 가 끌어오긴
+    # 하지만 곡선 계산이 전부 numpy 라 전이 의존으로 두지 않는다.
     "numpy>=2.3.5",
     "pandas>=3.0.5",
     "psycopg[binary,pool]>=3.2",
     "requests>=2.34.2",
-    # **정확히 고정한다.** 모델 번들(models/*.bundle) 안에 sklearn 의 PCA /
-    # IsolationForest 객체가 pickle 로 그대로 들어 있어서, 버전이 다르면 로드가
-    # 깨지거나 조용히 다르게 동작한다. 학습 환경과 같은 값이다(src/requirements.txt).
+    # **정확히 고정한다.** models/battery_anomaly.pkl 안에 sklearn 의
+    # MLPRegressor 객체가 pickle 로 그대로 들어 있어서, 버전이 다르면 로드가
+    # 깨지거나 조용히 다르게 동작한다. 학습과 추론이 같은 버전을 써야 한다.
     "scikit-learn==1.9.0",
     "sqlalchemy>=2.0.52",
     "streamlit>=1.61.1",
@@ -39,7 +39,7 @@ testpaths = ["tests"]
 
 # 저장소 루트를 sys.path 에 넣는다.
 #
-# 테스트가 루트에 있는 모듈을 import 한다(database, app, battery_detector).
+# 테스트가 루트에 있는 모듈을 import 한다(database, app, battery_anomaly, pack_loader).
 # `python -m pytest` 는 현재 디렉터리를 알아서 넣어 주지만 `pytest` 스크립트는
 # 넣지 않아서, 부르는 방법에 따라 ModuleNotFoundError 가 났다.
 # README 가 `docker compose exec dev pytest` 를 안내하므로 여기서 못 박는다.

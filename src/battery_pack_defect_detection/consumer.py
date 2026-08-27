@@ -88,6 +88,21 @@ class MeasurementBuffer:
         self.gaps = 0          # seq 가 건너뛴 횟수(유실 추정)
         self.last_at: datetime | None = None
 
+    def clear(self) -> None:
+        """받은 것을 전부 버리고 처음 상태로 되돌린다. 화면의 초기화가 부른다.
+
+        중복 판별용 event_id 집합과 구간별 마지막 seq 까지 비운다. 그 둘을
+        남기면 같은 데이터를 다시 흘렸을 때 전부 '중복' 으로 버려지고,
+        **예외는 나지 않는다** - 화면만 조용히 비어 있는다.
+        """
+        with self._lock:
+            self._rows.clear()
+            self._seen.clear()
+            self._seen_set.clear()
+            self._last_seq.clear()
+            self.received = self.duplicates = self.gaps = 0
+            self.last_at = None
+
     def add(self, row: dict) -> bool:
         """한 건을 넣는다. 중복이면 False.
 
@@ -236,10 +251,19 @@ ALERT_LIMIT = 200
 class VerdictBuffer:
     """받은 판정을 들고 있는 스레드 안전 버퍼.
 
-    화면이 쓰는 것은 세 가지다:
-      - latest_for()     구간별 마지막 판정 -> 타일 색, 판정 카드
-      - recent_alerts()  최근 이상/주의     -> 알림 목록
-      - stats()          수신 현황          -> 파이프라인 상태 표시
+    화면이 쓰는 것은 다섯 가지다:
+      - latest_for()       구간별 마지막 판정 -> 타일 색, 판정 카드
+      - results()          팩별 마지막 판정   -> 검사 결과판
+      - recent_alerts()    최근 이상/주의     -> 알림 목록
+      - alerts_for()       구간의 이상/주의   -> 차트에 겹치는 판정 띠
+      - flagged_modules()  구간의 지목 이력   -> 모듈 타일의 '이력 있음' 표시
+      - stats()            수신 현황          -> 파이프라인 상태 표시
+
+    뒤의 둘은 **지나간 이상이 화면에서 사라지는 문제** 때문에 생겼다.
+    판정 카드·도넛·타일은 마지막 판정 하나만 보므로, 이상이 떠도 다음 정상
+    판정이 3초 뒤에 덮어 버린다. 그러면 맨 아래 알림 목록을 읽는 수밖에 없다.
+    이 둘은 '무슨 일이 있었나' 를 구간 단위로 남겨, 차트와 타일이 지나간
+    사건을 계속 보여줄 수 있게 한다.
     """
 
     def __init__(self) -> None:
@@ -248,10 +272,34 @@ class VerdictBuffer:
         self._seen: deque[str] = deque(maxlen=SEEN_LIMIT)
         self._seen_set: set[str] = set()
         self._counts: dict[str, int] = defaultdict(int)   # state 별 수신 수
+        # 구간별 지목 이력: (팩, 구간) -> {모듈 번호: 그때의 state}.
+        # _alerts 와 달리 개수 상한이 없다 - 구간당 최대 16칸이라 샐 일이 없고,
+        # 타일의 '이력 있음' 표시는 오래된 이상이 밀려나면 안 되기 때문이다.
+        self._flagged: dict[tuple[int, str], dict[int, str]] = {}
+        # 구간별 마지막 seq. 되감기(= 재생을 다시 시작함)를 알아채는 데만 쓴다.
+        self._last_seq: dict[tuple[int, str], int] = {}
         self._lock = threading.Lock()
         self.received = 0
         self.duplicates = 0
         self.last_at: datetime | None = None
+
+    def clear(self) -> None:
+        """받은 판정을 전부 버리고 처음 상태로 되돌린다. 화면의 초기화가 부른다.
+
+        중복 판별용 verdict_id 집합까지 비운다. 남기면 같은 재생을 다시
+        했을 때 판정이 전부 중복으로 버려진다(api 는 판정마다 새 UUID 를
+        만들지만, 되감기 감지 등 다른 상태도 함께 되돌려야 한다).
+        """
+        with self._lock:
+            self._latest.clear()
+            self._alerts.clear()
+            self._seen.clear()
+            self._seen_set.clear()
+            self._counts.clear()
+            self._flagged.clear()
+            self._last_seq.clear()
+            self.received = self.duplicates = 0
+            self.last_at = None
 
     def add(self, verdict: dict) -> bool:
         """판정 한 건을 넣는다. verdict_id 가 겹치면 중복으로 버린다."""
@@ -266,14 +314,49 @@ class VerdictBuffer:
             self._seen_set.add(vid)
 
             key = (verdict["serial_number"], verdict["mode"])
+
+            # seq 가 되감기면 그 구간을 처음부터 다시 재생하는 것이다.
+            # 지난 재생의 지목 이력을 지운다 - 안 지우면 이상치 없이 다시
+            # 흘렸는데도 타일에 지난번 이상이 남아 거짓으로 보인다.
+            previous = self._last_seq.get(key)
+            if previous is not None and verdict["seq"] < previous:
+                self._flagged.pop(key, None)
+            self._last_seq[key] = verdict["seq"]
+
             self._latest[key] = verdict
             self._counts[verdict["state"]] += 1
-            # 정상은 알림 목록에 쌓지 않는다 - 알림은 봐야 할 것만 남긴다
-            if verdict["state"] != "normal":
+            # 알림과 지목 이력에는 **확정된 이상만** 남긴다.
+            #
+            # 2026-08-27: 팩 단위 모델로 바뀌면서 판정이 갱신되며 뒤집힌다.
+            # SOC 칸이 덜 찬 동안의 판정(warmup=True)은 근거가 모자라 실제로
+            # 틀린다 - DEMO08 은 세션 초반에 '용접불량 M02' 로 나왔다가 확정
+            # 시점에 '센서불량 M14' 가 된다. 그것을 이력에 남기면 최종 결과가
+            # 정상인 팩에도 '이상 1건' 이 영구히 붙어 검사 결과판이 거짓말을
+            # 한다. 미확정 판정은 '지금 판정' 으로만 보이고 이력에는 안 남는다.
+            if verdict["state"] != "normal" and not verdict.get("warmup"):
                 self._alerts.append(verdict)
+                # 지목이 있는 판정만 이력에 남는다. 지금 모델에서 지목이 붙는
+                # 것은 alarm 뿐이고 warning 은 늘 None 이다(detector.py) - 그래도
+                # state 를 함께 적어 둔다. 나중에 warning 이 지목을 갖게 되어도
+                # 이 자리를 고치지 않아도 되고, anomaly 가 warning 을 덮는다.
+                module = verdict["module"]
+                if module is not None:
+                    history = self._flagged.setdefault(key, {})
+                    if verdict["state"] == "anomaly" or module not in history:
+                        history[module] = verdict["state"]
             self.received += 1
             self.last_at = datetime.now(timezone.utc)
             return True
+
+    def results(self) -> list[dict]:
+        """팩별 최신 판정 전부. 팩 번호 순. **검사 결과판이 쓴다.**
+
+        2026-08-27 추가. 팩 단위 모델로 바뀌면서 화면의 중심이 '지금 이 팩을
+        지켜보기' 에서 '검사한 팩들의 결과를 늘어놓기' 로 옮겨갔다. 팩마다
+        latest_for 를 부르면 락을 팩 수만큼 잡게 되므로 한 번에 준다.
+        """
+        with self._lock:
+            return [self._latest[k] for k in sorted(self._latest)]
 
     def latest_for(self, serial_number: int, mode: str) -> dict | None:
         """한 구간의 가장 최근 판정. 없으면 None (api 가 아직 안 돌았다)."""
@@ -284,6 +367,30 @@ class VerdictBuffer:
         """최근 이상/주의 판정. 최신이 앞이다."""
         with self._lock:
             return list(self._alerts)[-limit:][::-1]
+
+    def alerts_for(self, serial_number: int, mode: str) -> list[dict]:
+        """한 구간의 이상/주의 판정 전부. **오래된 것이 앞이다.**
+
+        recent_alerts 와 정렬이 반대인 것은 쓰임이 달라서다. 알림 목록은
+        최신을 위에 보여주지만, 이쪽은 차트의 시간축에 겹칠 띠를 만드는
+        재료라 시각순으로 나와야 연속 구간을 묶을 수 있다.
+
+        _alerts 는 전 구간 합쳐 200건 상한이라, 여러 팩에 이상이 몰리면
+        오래된 띠가 조용히 사라진다. 타일의 '이력 있음' 표시(flagged_modules)
+        는 상한이 없으므로, 띠가 사라져도 '이 모듈에 뭔가 있었다' 는 남는다.
+        """
+        with self._lock:
+            return [a for a in self._alerts
+                    if (a["serial_number"], a["mode"]) == (serial_number, mode)]
+
+    def flagged_modules(self, serial_number: int, mode: str) -> dict[int, str]:
+        """이 구간에서 한 번이라도 지목된 모듈 -> 그때의 state.
+
+        모듈 번호는 사람이 읽는 1~16 이다(판정 메시지가 주는 그대로).
+        재생을 처음부터 다시 하면(seq 되감김) 비워진다.
+        """
+        with self._lock:
+            return dict(self._flagged.get((serial_number, mode), {}))
 
     def stats(self) -> dict:
         with self._lock:

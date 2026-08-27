@@ -17,6 +17,10 @@ pack_measurement 에는 원본 CSV 가 손대지 않은 상태로 들어 있다(
 원본은 샘플링 주기가 두 가지로 섞여 있다(1초 파일 72개, 5초 파일 30개).
 그대로 발행하면 팩마다 초당 메시지 수가 5배 차이 나므로, 읽어올 때 5초
 간격으로 통일한다. 자세한 방식은 RESAMPLE_SECONDS 주석 참고.
+
+원본 50팩과는 별개로 발표용 합성 팩 9개(DEMO01~09)가 같은 테이블에 들어
+있다. 기본 스트림에서는 빠지고, demo=True 로 부를 때만 나온다. DEMO_SERIALS
+주석 참고.
 """
 from collections.abc import Generator
 from sqlalchemy import create_engine, text
@@ -83,6 +87,61 @@ EXCLUDE_CHG = frozenset({
 # 그대로 있으므로 재적재는 필요 없다 - 그러라고 여기서 거르는 것이다.
 EXCLUDE_DCHG = frozenset(range(1000, 1051))
 
+# 발표용 합성 팩. make_demo.py 가 만들어 db/data/DEMO01_chg.csv ~ 로 들어온다.
+#
+# 원본 50팩은 전부 정상이라 그대로 재생하면 이상 판정이 한 번도 안 나온다.
+# 그래서 원본 1000_chg 의 타임라인에 실제 팩의 편차 패턴을 이식하고 그 위에
+# 고장을 주입한 팩 9개를 따로 만들었다. 정상 2, 용접불량 2, 셀 단위 이상 2,
+# 센서불량 2, 검출한계 미만 1 - 무엇을 심었는지 아는 데이터라 화면의 판정을
+# 정답과 대조할 수 있다. sensor_generator 의 --anomaly-every 와 다른 점은,
+# 저쪽이 발행 직전에 값을 흔드는 것이고 이쪽은 데이터 자체가 고장 팩이라는
+# 것이다(상관 구조가 살아 있어 모델이 실제로 판정할 수 있다).
+#
+# serial 을 9001~9009 로 잡아 원본(1000~1050)과 겹치지 않게 했다. 덕분에
+# pack_measurement 에 같이 들어 있어도 serial 만 보고 갈라낼 수 있고,
+# EXCLUDE_CHG / EXCLUDE_DCHG 같은 구간 제외 규칙과도 부딪히지 않는다.
+#
+# 기본 스트림에서 빼는 이유: 합성 데이터가 원본 통계에 섞이면 안 되고,
+# 명세서에 적힌 행 수(38,058)도 흔들린다. 데모를 재생할 때만 demo=True 다.
+#
+# 실측 - 배제 규칙과 통전 필터까지 전부 적용하고 5초로 맞추면 팩당 816건,
+# 9팩 합계 7,344건이 나간다(원본 6,009행 -> 통전 4,077행 -> 816건).
+# sensor_generator 의 3초 주기로는 팩 하나에 41분, 전체 6시간이다.
+DEMO_SERIALS = frozenset(range(9001, 9010))
+
+# 데모 팩의 정답표. make_demo.py 가 함께 뱉는 answer_key.csv 와 같은 내용을
+# 코드 쪽에도 둔다 - CSV 는 적재되지 않아 DB 에 없고, 화면이 "이 팩은 무엇을
+# 심었는가" 를 보여주려면 어딘가에서 읽어야 하기 때문이다.
+#
+#   donor    : 편차 패턴을 가져온 실제 팩 번호
+#   fault    : 주입한 고장 유형 (None 이면 정상)
+#   location : 고장을 심은 자리. 모듈 단위면 M07, 셀 단위면 M05CV06
+#   expect   : 모델이 내야 하는 판정
+#
+# DEMO09 만 expect 가 '정상' 인데 fault 가 있다. 2 mV 는 검출 한계 아래라
+# 안 걸리는 것이 맞다 - 임계값이 헐거워지면 여기가 먼저 깨진다는 뜻이라
+# 일부러 남겨 둔 경계 사례다.
+DEMO_PACKS = {
+    9001: dict(pack_id="DEMO01", donor=1013, fault=None,
+               location="",        magnitude="",       expect="정상"),
+    9002: dict(pack_id="DEMO02", donor=1011, fault=None,
+               location="",        magnitude="",       expect="정상"),
+    9003: dict(pack_id="DEMO03", donor=1002, fault="weld",
+               location="M07",     magnitude="8.0 mV",  expect="용접불량"),
+    9004: dict(pack_id="DEMO04", donor=1028, fault="weld",
+               location="M12",     magnitude="12.0 mV", expect="용접불량"),
+    9005: dict(pack_id="DEMO05", donor=1046, fault="wire",
+               location="M05CV06", magnitude="8.0 mV",  expect="셀 단위 이상"),
+    9006: dict(pack_id="DEMO06", donor=1029, fault="capacity",
+               location="M09CV03", magnitude="25.0 mV", expect="셀 단위 이상"),
+    9007: dict(pack_id="DEMO07", donor=1020, fault="sensor_offset",
+               location="M01T02",  magnitude="2.5 °C",  expect="센서불량"),
+    9008: dict(pack_id="DEMO08", donor=1003, fault="sensor_stuck",
+               location="M14T01",  magnitude="stuck",   expect="센서불량"),
+    9009: dict(pack_id="DEMO09", donor=1010, fault="weld",
+               location="M03",     magnitude="2.0 mV",  expect="정상 (검출한계 미만)"),
+}
+
 # 센서 미응답 표시값. 176셀 전압 배열의 실제 최솟값은 3.435V 이고 0 이 한 번도
 # 없으므로, 요약 컬럼만 0 / -40 으로 떨어지는 것은 실측이 아니다.
 SENTINEL_ZERO = ("voltage", "v_min", "v_max")
@@ -91,10 +150,10 @@ SENTINEL_MINUS40 = ("t_min", "t_max", "t_avg")
 # 통전 판정 기준 [A]. |current| 가 이보다 커야 발행한다.
 #
 # 2026-08-26 결정: 비통전 행을 발행하지 않는다. 충전이 멈춘 구간은 모델의 적용
-# 범위 밖이라 어차피 판정되지 않고(battery_detector.StreamGate 가 같은 값으로
-# 게이트한다), 발행해 봐야 판정 없는 측정만 쌓인다.
+# 범위 밖이라 어차피 판정되지 않고, 발행해 봐야 판정 없는 측정만 쌓인다.
 #
-# 이 값은 모델이 학습 때 쓴 것과 같아야 한다(src/step1_clean.py 의 통전 판정).
+# 이 값은 모델이 학습 때 쓴 것과 같아야 한다. pack_loader 가 학습·추론 양쪽에서
+# 이 상수를 그대로 import 해서 쓴다 - 숫자를 복제하면 한쪽만 바뀌어도 모른다.
 # 실측으로는 0 과 1.0 A 사이의 행이 한 건도 없어서 `<> 0` 과 결과가 같지만,
 # 기준을 모델 쪽에 맞춰 둔다 - 새 데이터에 0.5 A 같은 값이 들어와도 양쪽이
 # 같은 판단을 하게 하려는 것이다.
@@ -108,10 +167,10 @@ SENTINEL_MINUS40 = ("t_min", "t_max", "t_avg")
 # (예: 1018_chg 는 10,454행 중 9,497행이 그 구간이다).
 #
 # **주의 - 이 필터는 세션 경계 신호를 지운다.** 원본에는 충전 완료 후 20~160분씩
-# 정지 구간이 있고, 모델은 그 정지가 이어지는 것을 보고 "충전 세션이 끝났다"고
-# 판단해 상태를 비웠다(StreamGate.idle_reset_rows). 정지 행이 아예 오지 않으면
-# 그 신호가 사라지므로, api 쪽에서 measured_at 의 공백으로 같은 판단을 한다
-# (detector.SESSION_GAP_SECONDS). 한쪽만 바꾸면 안 된다.
+# 정지 구간이 있어서, 그 정지가 이어지는 것을 보면 "충전 세션이 끝났다"고 알 수
+# 있었다. 정지 행이 아예 오지 않으면 그 신호가 사라지므로, api 쪽에서
+# measured_at 의 공백으로 같은 판단을 한다(detector.SESSION_GAP_SECONDS).
+# 한쪽만 바꾸면 안 된다.
 CURRENT_ON_AMPS = 1.0
 
 # 통일할 샘플링 주기(초).
@@ -145,11 +204,15 @@ COLUMNS = """
 _BUCKET = f"(extract(epoch FROM measured_at)::bigint / {RESAMPLE_SECONDS})"
 
 
-def _where(serial_number: int | None, mode: str | None) -> tuple[str, dict]:
+def _where(serial_number: int | None, mode: str | None,
+           demo: bool = False) -> tuple[str, dict]:
     """배제 규칙 + 통전 구간 + 사용자 조건을 WHERE 절로 만든다.
 
     DB 는 원시 데이터라 배제 대상이 그대로 살아 있다. 걸러내는 것이 여기 일이다.
     NULL <> 0 은 참이 아니므로, 불완전 행의 NULL 스칼라도 이 조건에서 함께 빠진다.
+
+    demo 는 원본 50팩과 합성 팩 9개 중 어느 쪽을 볼지 고르는 스위치다
+    (DEMO_SERIALS 주석 참고). 둘을 섞어 보내는 경우는 없다.
     """
     if mode not in (None, "chg", "dchg"):
         raise ValueError(f"mode 는 'chg' 또는 'dchg' 여야 한다: {mode!r}")
@@ -181,9 +244,18 @@ def _where(serial_number: int | None, mode: str | None) -> tuple[str, dict]:
         "exclude_dchg": sorted(EXCLUDE_DCHG),
         "current_on": CURRENT_ON_AMPS,
     }
+    # 데모 팩과 원본 팩 가르기. 팩을 콕 집어 부른 경우에는 이 구분을 따지지
+    # 않는다 - serial 9003 을 달라고 했으면 그건 데모를 달라는 뜻이 분명한데,
+    # demo=True 를 같이 안 줬다고 빈 결과를 주면 부르는 쪽만 헷갈린다.
+    params["demo_serials"] = sorted(DEMO_SERIALS)
     if serial_number is not None:
         clauses.append("serial_number = :serial_number")
         params["serial_number"] = serial_number
+    elif demo:
+        clauses.append("serial_number = ANY(:demo_serials)")
+    else:
+        clauses.append("serial_number <> ALL(:demo_serials)")
+
     if mode is not None:
         clauses.append("mode = :mode")
         params["mode"] = mode
@@ -193,7 +265,8 @@ def _where(serial_number: int | None, mode: str | None) -> tuple[str, dict]:
 
 def _build_query(serial_number: int | None,
                  mode: str | None,
-                 limit: int | None = None) -> tuple[str, dict]:
+                 limit: int | None = None,
+                 demo: bool = False) -> tuple[str, dict]:
     """조회 SQL 과 바인드 파라미터를 만든다.
 
     DISTINCT ON 이 5초 구간마다 첫 행만 남기는 부분이다. ORDER BY 의 앞쪽이
@@ -208,8 +281,11 @@ def _build_query(serial_number: int | None,
     측정 시각은 이 순서에서 단조 증가하지 않는다. 충전 구간이 끝나고 방전
     1000번이 시작될 때 measured_at 이 2021-03 에서 2020-08 로 되돌아간다.
     팩 하나만 놓고 보면 여전히 충전 -> 방전 순이므로 시계열은 온전하다.
+
+    데모 재생(demo=True)에서는 이 정렬이 곧 DEMO01 -> DEMO09 순이다. serial
+    9001~9009 를 검사 순서대로 매겨 뒀기 때문에 따로 정렬할 것이 없다.
     """
-    where, params = _where(serial_number, mode)
+    where, params = _where(serial_number, mode, demo)
     sql = (
         f"SELECT DISTINCT ON (mode, serial_number, {_BUCKET})\n{COLUMNS}"
         f"FROM pack_measurement\n{where}\n"
@@ -223,7 +299,8 @@ def _build_query(serial_number: int | None,
 
 def load_measurements(serial_number: int | None = None,
                       mode: str | None = None,
-                      limit: int | None = None) -> pd.DataFrame:
+                      limit: int | None = None,
+                      demo: bool = False) -> pd.DataFrame:
     """Kafka 로 발행할 측정 이력을 5초 간격으로 읽어온다.
 
     반환 컬럼:
@@ -239,21 +316,27 @@ def load_measurements(serial_number: int | None = None,
 
     인자를 주지 않으면 125,488행이 나온다. 발행 루프처럼 전량을 훑어야 할
     때는 이쪽 대신 iter_measurements 를 쓴다.
+
+    demo=True 면 합성 팩 9개(7,344행)만 나온다. 어느 팩에 무엇을 심었는지는
+    DEMO_PACKS 에 있다.
     """
-    sql, params = _build_query(serial_number, mode, limit)
+    sql, params = _build_query(serial_number, mode, limit, demo)
     df = pd.read_sql(text(sql), engine, params=params)
     if df.empty:
         raise RuntimeError(
             "조건에 맞는 행이 없습니다. pack_measurement 가 비어 있거나 "
-            "(serial_number/mode) 조건이 맞지 않습니다. "
-            "적재는 `python load_raw.py` 로 합니다."
+            "(serial_number/mode/demo) 조건이 맞지 않습니다. "
+            "적재는 `python load_raw.py` 로 합니다"
+            + (" (데모 팩은 db/data/DEMO*_chg.csv 가 있어야 합니다)." if demo
+               else ".")
         )
     return df
 
 
 def iter_measurements(serial_number: int | None = None,
                       mode: str | None = None,
-                      batch_size: int = 1000) -> Generator[dict, None, None]:
+                      batch_size: int = 1000,
+                      demo: bool = False) -> Generator[dict, None, None]:
     """측정 이력을 5초 간격으로, 한 행씩 dict 로 흘려보낸다. 발행 루프가 쓴다.
 
     stream_results 라 서버 사이드 커서로 받는다. 125,488행을 그대로 돌려도
@@ -261,8 +344,11 @@ def iter_measurements(serial_number: int | None = None,
 
         for row in iter_measurements(serial_number=1000, mode="chg"):
             producer.produce(topic, key=str(row["serial_number"]), value=...)
+
+    demo=True 면 합성 팩 9개만 DEMO01 -> DEMO09 순으로 흘러나온다(7,344행).
+    발표에서 재생하는 것이 이쪽이다.
     """
-    sql, params = _build_query(serial_number, mode)
+    sql, params = _build_query(serial_number, mode, demo=demo)
     options = {"stream_results": True, "max_row_buffer": batch_size}
 
     with engine.connect().execution_options(**options) as conn:

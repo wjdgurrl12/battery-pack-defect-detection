@@ -89,16 +89,18 @@ docker compose exec dev python load_raw.py
 
 ### 모델 관련 (`BD_*`)
 
-api 가 기동할 때 `detector.load()` 가 읽는다. 원본 설명은
-[`src/.env.example`](../src/.env.example) 에 있다.
+api 가 기동할 때 `detector.load()` 가 읽는다.
 
 | 변수 | 값 | 비고 |
 |---|---|---|
-| `BD_ARTIFACT_BUNDLE` | `/workspace/models/battery_model_20260825_165511_b_option.bundle` | 코드에도 같은 기본값이 있지만 compose 에서 못 박는다 — 번들이 하나 더 생겼을 때 '가장 최근 것' 이 조용히 바뀌면 안 된다 |
-| `BD_SRC_DIR` | `/workspace/src` | 모델 코드(`step*.py`)를 여기서 import 한다 |
-| `BD_SOURCE_HZ` | **`0.2`** | **가장 틀리기 쉬운 값.** 아래 7절 참고 |
-| `BD_SCORE_KEY` | `rule` | 임계 11.47. `score` 로 바꾸면 임계(33.72)도 번들에서 짝이 맞춰 따라온다 |
-| `BD_VERIFY_HASH` | `1` | 기동 시 번들의 코드 해시와 `src/step*.py` 대조. 어긋나면 기동 거부 |
+| `BD_ANOMALY_MODEL` | `/workspace/models/battery_anomaly.pkl` | 코드에도 같은 기본값이 있지만 compose 에서 못 박는다 — pkl 이 하나 더 생겼을 때 어느 것을 쓰는지가 조용히 바뀌면 안 된다. 파일이 없으면 api 가 기동하지 않는다 |
+
+학습은 `docker compose exec dev python train_anomaly.py` 로 한다(정상 50팩,
+약 90초). 끝나면 데모 팩 9개를 판정해 정답표와 대조한 표까지 찍는다.
+
+> **2026-08-27 이전의 `BD_ARTIFACT_BUNDLE` / `BD_SRC_DIR` / `BD_SOURCE_HZ` /
+> `BD_SCORE_KEY` / `BD_VERIFY_HASH` 는 없어졌다.** 그 변수들을 읽던 행 단위
+> 모델은 [`old/`](../old/README.md) 로 옮겼고 어디에서도 import 하지 않는다.
 
 ---
 
@@ -113,12 +115,14 @@ api 가 기동할 때 `detector.load()` 가 읽는다. 원본 설명은
 | `load_raw.py` | CSV → Postgres (최초 1회) |
 | `inject_anomalies.py` | 이상 측정 주입 도구 (개발용) |
 | `src/battery_pack_defect_detection/` | 공용 패키지 — `consumer.py`(Kafka), `detector.py`(모델 접착부) |
-| `battery_detector.py` | **모델팀 인수인계본.** 전처리 게이트 + 검출기. Kafka·FastAPI 를 모른다 |
-| `src/step*.py` 외 16개 | 모델 학습 코드. 번들에 복제하지 않고 **import 한다** |
-| `models/*.bundle` | 모델 아티팩트 1개 (3.2 MB) |
+| `battery_anomaly.py` | **모델팀 인수인계본.** 오토인코더 2개 + 로버스트 통계. 팩(충전 세션) 단위로 합/불을 낸다 |
+| `pack_loader.py` | 측정 → 모델 입력(`PackData`). **학습과 추론이 같은 전처리를 거치게 하는 것**이 이 파일의 일이다 |
+| `train_anomaly.py` | 정상 50팩 학습 + 데모 9팩 검증 |
+| `models/battery_anomaly.pkl` | 모델 아티팩트 1개 |
+| `old/` | 2026-08-27 이전의 행 단위 모델. **어디에서도 import 하지 않는다** ([old/README.md](../old/README.md)) |
 | `db/data/*.csv` | 원본 102개 파일 |
 | `tests/test_smoke.py` | **환경** 확인 (파이썬·Postgres·Kafka 왕복) |
-| `tests/test_detector.py` | **모델** 확인 27건. 인프라 없이 돈다 |
+| `tests/test_detector.py` | **모델** 확인 33건. 인프라 없이 돈다 |
 
 ---
 
@@ -168,11 +172,15 @@ curl -X POST localhost:3000/packs/1000/reset   # 한 팩의 모델 상태 초기
 
 | 항목 | 정상값 | 어긋나면 |
 |---|---|---|
-| `model.stride` | **`1`** | `BD_SOURCE_HZ` 가 틀렸다 (7절) |
-| `model.loaded` | `true` | 번들·해시 문제. api 로그를 본다 |
+| `model.loaded` | `true` | pkl 을 못 읽었다. api 로그를 본다 |
+| `model.threshold` | 세 스트림 모두 0 초과, 세 자리 미만 | 임계가 터무니없이 크면 그 스트림은 죽은 것이다 (`battery_anomaly.MAD_FLOOR_MV` 주석) |
 | `received` | `judged` 합 + `skipped` | 판정 예외 — `consumer_errors` 를 본다 |
 | `published` | `judged` 합과 같음 | 브로커 쪽 문제 |
-| `packs[].warmup_left` | `0` | 아직 온도 판정 보류 중 |
+| `packs[].coverage` | 세션이 진행되면 1.0 으로 오른다 | 안 오르면 SOC 가 안 올라가는 구간을 보내고 있다 |
+
+**`judged` 는 `received` 보다 훨씬 작다.** 팩 단위 모델이라 30행마다 한 번만
+판정한다(`detector.REPREDICT_EVERY_ROWS`). 816행짜리 팩 하나에 판정 22건이
+정상이다 — 예전 행 단위 모델처럼 1:1 로 나오지 않는다.
 
 ### 테스트
 
@@ -185,16 +193,17 @@ docker compose exec dev pytest tests/test_detector.py  # 모델 (인프라 불�
 
 ## 7. 함정 — 겪은 것들
 
-### 1) `BD_SOURCE_HZ` 는 `0.2` 다. `1.0` 이 아니다
+### 1) 판정이 바로 안 나오는 것은 정상이다
 
-원본 CSV 가 1초/행인 것을 보고 `1.0` 을 넣기 쉽다. 그런데 토픽에 흐르는 것은
-`database.py` 가 5초 구간마다 첫 행만 남긴 **5초/행**이다.
+새 모델은 팩(충전 세션) 단위라 행 하나만 보고는 아무 말도 할 수 없다. 측정을
+쌓아 두었다가 30행(2.5분)마다 누적분 전체로 다시 판정한다.
 
-`1.0` 을 넣으면 모델이 한 번 더 솎아 25초/행이 된다. **예외는 나지 않고 점수
-분포도 거의 그대로다.** 대신 시간 창이 전부 5배 늘어난다 — 지속 조건 10→50초,
-warmup 300→1500초. 감도와 오탐률만 조용히 달라진다.
+첫 판정까지 필요한 것은 두 가지다 — 100행 이상, 그리고 **SOC 16칸 중 4칸 이상**.
+모델이 빈 SOC 칸을 앞뒤 값으로 보간해서 채우기 때문에, 칸이 덜 차면 그 점수는
+지어낸 값이 된다. 8칸을 넘기 전까지는 판정이 나와도 미확정(`warning` +
+`warmup: true`)이다.
 
-→ 기동 후 **`/stats` 의 `model.stride` 가 `1`** 인지 확인한다.
+→ `/stats` 의 `packs[].coverage` 로 지금 몇 칸이 찼는지 볼 수 있다.
 
 ### 2) 파일을 고치면 api 의 메모리가 날아간다
 
@@ -202,7 +211,7 @@ api 는 `uvicorn --reload` 로 뜬다. `/workspace` 의 `.py` 를 **아무거나
 재시작하고, 그때 다음이 전부 사라진다.
 
 - `MeasurementBuffer` / `VerdictBuffer` (수신 이력)
-- 모델의 팩별 상태 (링버퍼·온도 오프셋·지속 카운터) → warmup 이 다시 300초
+- 모델의 팩별 누적 버퍼 → 그 팩은 SOC 칸을 처음부터 다시 채워야 한다
 
 그런데 **컨슈머 그룹 오프셋은 커밋된 채로 남는다.** 그래서 재시작 후에는 이미
 읽은 메시지를 다시 읽지 않아 화면이 비어 보인다. 코드를 고쳤다면 generator 를
@@ -276,7 +285,7 @@ PowerShell 에서는 그냥 된다.
 | Python | 3.13.11 | |
 | numpy | 2.5.2 | |
 | pandas | 3.0.5 | |
-| **scikit-learn** | **1.9.0** | **정확히 고정.** 번들 안에 PCA/IsolationForest 객체가 pickle 로 들어 있어 버전이 다르면 로드가 깨지거나 조용히 다르게 동작한다 |
+| **scikit-learn** | **1.9.0** | **정확히 고정.** `battery_anomaly.pkl` 안에 MLPRegressor 객체가 pickle 로 들어 있어 버전이 다르면 로드가 깨지거나 조용히 다르게 동작한다 |
 | fastapi | 0.141.1 | |
 | streamlit | 1.61.1 | |
 | confluent-kafka | 2.15.0 | api·streamlit 이 쓰는 Kafka 클라이언트 |
@@ -294,5 +303,5 @@ docker compose exec dev python -c "import sklearn, numpy, pandas; print(sklearn.
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — 의존성 추가, 이미지 갱신, 컨테이너가 안 뜰 때
 - [`docs/pipeline-overview.md`](pipeline-overview.md) — 파이프라인 동작 원리, 판정 로직, 주기
 - [`docs/kafka-message-spec.md`](kafka-message-spec.md) — 측정 메시지 필드 전체 명세
-- [`src/README.md`](../src/README.md) — 모델팀 인수인계 문서 (함정·운영 지표·적용 범위)
-- [`src/.env.example`](../src/.env.example) — `BD_*` 환경변수 원본 설명
+- [`docs/ae_model.md`](ae_model.md) · [`diagnostics.md`](diagnostics.md) · [`joint_anomaly.md`](joint_anomaly.md) — 모델 설계 근거 실험 기록
+- [`old/README.md`](../old/README.md) — 2026-08-27 이전의 행 단위 모델

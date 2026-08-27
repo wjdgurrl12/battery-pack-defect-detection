@@ -1,17 +1,22 @@
 """이상탐지 모델이 api 에 제대로 붙었는지 확인한다.
 
-인프라(Kafka·DB)가 필요 없다. 모델 번들과 `db/data/*.csv` 만 있으면 돈다.
+인프라(Kafka·DB)가 필요 없다. 학습된 모델(models/battery_anomaly.pkl)과
+`db/data/*.csv` 만 있으면 돈다.
 
-**왜 이 테스트가 있는가.** 이 모델은 잘못 붙여도 예외가 나지 않는다. 입력 주기를
-틀리게 넣거나, 방전 구간을 같이 먹이거나, 셀 배열 순서가 뒤집혀도 점수는 그럴듯한
-값이 계속 나온다. 감도와 오탐률만 조용히 달라진다. 그래서 '터지지 않는다' 로는
-확인이 안 되고, **학습 때와 같은 수를 내는지**를 봐야 한다.
+**왜 이 테스트가 있는가.** 이 모델은 잘못 붙여도 예외가 나지 않는다. 셀 배열
+순서가 뒤집히거나, 비통전 행이 섞여 들어오거나, 세션 두 개가 이어 붙어도
+점수는 그럴듯한 값이 계속 나온다. 감도와 오탐률만 조용히 달라진다. 그래서
+'터지지 않는다' 로는 확인이 안 되고, **정답을 아는 데이터에서 그 정답을 내는지**
+를 봐야 한다.
 
-기준값 2.529 는 모델팀이 `src/step9_realtime.replay` 로 낸 정상 팩 1002 의 중앙값
-점수다(src/README.md 의 스모크 테스트 [3]). 전처리·피처·정규화 어디가 틀어져도
-이 값이 흔들리므로, 한 줄로 전 경로를 확인하는 셈이다.
+2026-08-27: 모델이 오토인코더(battery_anomaly.py)로 바뀌면서 기준점도 바뀌었다.
+예전에는 정상 팩 1002 의 중앙값 점수 2.529 였는데, 새 모델은 행마다 점수를 내지
+않아 그 수가 존재하지 않는다. 대신 **데모 팩 9개의 판정을 정답표와 대조**한다.
+무엇을 심었는지 아는 데이터라(database.DEMO_PACKS) 훨씬 강한 확인이고, 전처리
+· 곡선 · AE · 임계 · 지목 파싱까지 전 경로가 한 번에 걸린다.
 """
 
+import itertools
 import uuid
 
 import pandas as pd
@@ -24,23 +29,20 @@ from battery_pack_defect_detection import detector
 CELL_COLS = [f"M{m:02d}CV{c:02d}" for m in range(1, 17) for c in range(1, 12)]
 TEMP_COLS = [f"M{m:02d}T{s:02d}" for m in range(1, 17) for s in range(1, 3)]
 
-# 정상 팩. 모델 학습에 쓰인 30팩 중 holdout 쪽이다.
+# 정상 팩. 모델 학습에 쓰인 50팩 중 하나다.
 NORMAL_PACK = 1002
-# 결함을 주입할 팩. NORMAL_PACK 과 나눠 써야 모델 상태가 섞이지 않는다.
+# 결함을 주입할 팩. NORMAL_PACK 과 나눠 써야 누적 버퍼가 섞이지 않는다.
 INJECT_PACK = 1003
-
-# 모델팀 기준값(src/README.md). 전처리가 맞으면 여기서 다시 나온다.
-REFERENCE_MEDIAN_SCORE = 2.529
 
 
 @pytest.fixture(scope="module")
 def model():
-    """모델을 한 번만 읽는다. 번들 로드가 3초쯤 걸린다."""
+    """모델을 한 번만 읽는다."""
     detector.load()
     return detector
 
 
-def measurements(pack: int, mode: str, inject: tuple | None = None,
+def measurements(pack: str | int, mode: str = "chg", inject: tuple | None = None,
                  energized_only: bool = True, shift_days: int = 0):
     """CSV 를 읽어 consumer.flatten 이 주는 모양의 측정 행으로 흘려보낸다.
 
@@ -50,8 +52,10 @@ def measurements(pack: int, mode: str, inject: tuple | None = None,
         1) 통전 구간만   |current| > CURRENT_ON_AMPS   (energized_only)
         2) 5초 구간마다 첫 행만                        (RESAMPLE_SECONDS)
 
-    `energized_only=False` 는 발행 쪽 필터가 없을 때를 재현한다. 모델의
-    StreamGate 가 같은 판단을 하므로 결과가 같아야 한다.
+    센티넬 배제는 여기서 하지 않는다. 실측으로 통전 행 중에 센티넬 행이 한 건도
+    없어서(1002/1003 확인) 결과가 같고, 거르는 규칙을 테스트가 또 복제하면
+    운영과 어긋났을 때 오히려 못 잡는다.
+
     `shift_days` 는 같은 구간을 며칠 뒤로 밀어 두 번째 충전 세션을 만든다.
     """
     import database
@@ -74,10 +78,11 @@ def measurements(pack: int, mode: str, inject: tuple | None = None,
         cells[start:end, CELL_COLS.index(col)] += millivolts / 1000.0
     temps = df[TEMP_COLS].to_numpy(float)
 
+    serial = int(df["SerialNumber"].iloc[0])
     for i in range(len(df)):
         yield {
             "event_id": str(uuid.uuid4()),
-            "serial_number": pack,
+            "serial_number": serial,
             "mode": mode,
             "measured_at": ts.iloc[i].to_pydatetime(),
             "seq": i,
@@ -86,6 +91,26 @@ def measurements(pack: int, mode: str, inject: tuple | None = None,
             "rsoc_avg": float(df["RSOCavg"].iloc[i]),
             "current": float(df["Current"].iloc[i]),
         }
+
+
+def last_verdict(model, pack, **kwargs):
+    """한 팩을 끝까지 흘리고 마지막 판정을 돌려준다. 판정이 없으면 None.
+
+    **먹이기 전에 그 팩의 누적 버퍼를 반드시 비운다.** 같은 팩을 두 번 흘리면
+    두 번째는 전부 '역순 도착' 으로 버려져 판정이 0건이 된다(설계된 동작이다 -
+    detector 의 '판정하지 않는 행' 참고). serial 은 CSV 에서 읽는다. 파일 이름이
+    DEMO01 이어도 serial 은 9001 이라 이름으로는 알 수 없다.
+    """
+    rows = measurements(pack, **kwargs)
+    first = next(rows)
+    model.reset_pack(first["serial_number"])
+
+    final = None
+    for row in itertools.chain([first], rows):
+        verdict = model.judge(row)
+        if verdict is not None:
+            final = verdict
+    return final
 
 
 def test_resample_period_matches_database():
@@ -101,186 +126,200 @@ def test_resample_period_matches_database():
         f"database 는 {database.RESAMPLE_SECONDS}초마다 보낸다")
 
 
-def test_energized_threshold_matches_model(model):
-    """발행 쪽 통전 기준과 모델의 통전 게이트가 같은 값인가.
+def test_energized_threshold_is_shared_with_database():
+    """학습이 쓰는 통전 기준과 발행이 쓰는 통전 기준이 같은 값인가.
 
-    database.py 가 더 느슨하면 모델이 어차피 버리고(무해), 더 빡빡하면 모델이
-    보고 싶어 하는 행이 발행되지 않는다. 어느 쪽이든 두 곳이 같은 값을 보는
-    편이 낫다.
+    **새 모델에는 자체 통전 게이트가 없다.** 예전 모델(StreamGate)은 비통전
+    행이 섞여 들어와도 스스로 걸러냈지만, 지금은 database.py 가 거른 것을
+    그대로 믿는다. 그래서 두 곳이 같은 상수를 봐야 한다 - pack_loader 가
+    숫자를 복제하지 않고 database 에서 import 하는 이유가 이것이다.
     """
     import database
+    import pack_loader
 
-    assert database.CURRENT_ON_AMPS == model._pool.st.current_on
+    source = pack_loader.from_csv.__doc__ or ""
+    assert "database.py" in source, "from_csv 가 어느 규칙을 재현하는지 적혀 있어야 한다"
+    # 상수를 복제했는지 확인한다. 복제했다면 한쪽만 바뀌어도 여기서 안 걸린다.
+    assert pack_loader.database.CURRENT_ON_AMPS is database.CURRENT_ON_AMPS
 
 
-def test_model_loads_and_stride_is_one(model):
-    """번들이 읽히고, 토픽 주기와 학습 격자가 맞아떨어지는가.
+def test_model_loads_with_three_stream_thresholds(model):
+    """모델이 읽히고 세 스트림의 임계가 모두 잡혀 있는가.
 
-    stride 가 1 이 아니면 모델이 측정을 한 번 더 솎고 있다는 뜻이다.
-    BD_SOURCE_HZ 를 잘못 넣은 경우가 거의 전부다.
+    임계가 0 이거나 터무니없이 크면(예전에 셀 스트림이 3e9 로 잡혀 죽었다)
+    그 스트림은 아무것도 검출하지 않는다. **예외는 나지 않는다.**
     """
+    from battery_anomaly import STREAMS
+
     info = model.info()
     assert info["loaded"]
-    assert info["stride"] == 1, (
-        f"stride 가 {info['stride']} 다. 토픽은 5초/행인데 모델이 더 솎고 있다 - "
-        "BD_SOURCE_HZ 를 확인할 것(0.2 여야 한다)")
-    assert info["threshold"] > 0
+    assert set(info["threshold"]) == set(STREAMS)
+    for name, value in info["threshold"].items():
+        assert 0 < value < 1e3, (
+            f"{name} 임계가 {value} 다. 0 이면 전부 걸리고, 지나치게 크면 "
+            "그 스트림은 죽은 것이다 - battery_anomaly.MAD_FLOOR_MV 주석 참고")
     assert info["version"] != "0.0.0"
 
 
-def test_normal_pack_reproduces_reference_score(model):
-    """정상 팩의 중앙값 점수가 학습 때와 같은가. 전 경로를 한 줄로 확인한다.
+@pytest.mark.parametrize("pack_id", [f"DEMO{n:02d}" for n in range(1, 10)])
+def test_demo_pack_final_verdict_matches_answer_key(model, pack_id):
+    """데모 팩을 끝까지 흘렸을 때 정답표대로 판정하는가. **이 파일의 기준점이다.**
 
-    점수는 판정 메시지에 실리지 않으므로(2026-08-25 결정) 검출기에서 직접 꺼낸다.
-    테스트라서 들여다보는 것이고, 바깥 계약은 그대로다.
+    데모 팩은 실제 팩의 편차 패턴 위에 고장을 심어 만든 것이라(make_demo.py)
+    무엇이 정답인지 안다. 전처리·곡선·AE·임계·지목 파싱 어디가 틀어져도
+    여기서 걸린다.
 
-    이 값이 어긋나면 전처리·피처·정규화·모델 중 어딘가가 학습 때와 달라진 것이다.
-    가장 흔한 원인은 셀/온도 배열 순서와 입력 주기 두 가지다.
+    DEMO09 만 고장을 심었는데 정답이 '정상' 이다. 2 mV 는 검출 한계 아래라
+    안 걸리는 것이 맞다 - 임계가 헐거워지면 여기가 먼저 깨진다.
     """
-    import numpy as np
+    import database
 
-    scores = []
-    model.reset_pack(NORMAL_PACK)
-    for row in measurements(NORMAL_PACK, "chg"):
-        result = model._pool.feed(
-            pack_id=row["serial_number"], ts=row["measured_at"].timestamp(),
-            cells=row["cell_voltages"], temps=row["module_temps"],
-            soc=row["rsoc_avg"], current=row["current"],
-            key=row["measured_at"].timestamp())
-        if result is not None:
-            scores.append(result.score)
+    answer = next(m for m in database.DEMO_PACKS.values() if m["pack_id"] == pack_id)
+    expected = answer["expect"].split(" (")[0]
 
-    assert scores, "정상 팩인데 판정된 행이 하나도 없다"
-    assert np.median(scores) == pytest.approx(REFERENCE_MEDIAN_SCORE, abs=0.001), (
-        f"중앙값 {np.median(scores):.3f} != 기준 {REFERENCE_MEDIAN_SCORE}. "
-        "셀/온도 배열 순서나 입력 주기를 확인할 것")
+    verdict = last_verdict(model, pack_id)
+    assert verdict is not None, f"{pack_id} 에서 판정이 한 건도 안 나왔다"
+
+    got = verdict["fault_type"] or "정상"
+    assert got == expected, (
+        f"{pack_id}: '{got}' 로 판정했는데 정답은 '{expected}' 다 "
+        f"(주입: {answer['fault'] or '없음'} @ {answer['location'] or '-'})")
+
+    # 세션을 끝까지 봤으므로 확정 판정이어야 한다.
+    assert not verdict["warmup"], "끝까지 흘렸는데 아직 판정 확정 전이다"
+    assert verdict["state"] == ("normal" if got == "정상" else "anomaly")
+
+
+@pytest.mark.parametrize("pack_id, module, cell", [
+    ("DEMO03", 7, None),     # 용접불량 - 모듈까지만 짚는다
+    ("DEMO04", 12, None),
+    ("DEMO05", 5, 6),        # 센싱와이어 - 인접 쌍의 앞쪽 셀
+    ("DEMO06", 9, 3),        # 용량불량 - 셀까지
+    ("DEMO07", 1, None),     # 온도 센서 - 셀이 없다
+    ("DEMO08", 14, None),
+])
+def test_demo_pack_points_at_the_injected_part(model, pack_id, module, cell):
+    """판정이 맞아도 지목이 틀리면 정비 대상이 엉뚱해진다.
+
+    기대값은 make_demo.py 가 심은 자리(database.DEMO_PACKS 의 location)다.
+    """
+    verdict = last_verdict(model, pack_id)
+    assert (verdict["module"], verdict["cell"]) == (module, cell), (
+        f"{pack_id}: M{verdict['module']}CV{verdict['cell']} 를 짚었는데 "
+        f"심은 곳은 M{module}CV{cell} 다")
 
 
 def test_normal_pack_has_no_alarm(model):
-    """정상 팩에서는 이상 판정이 나오지 않아야 한다.
-
-    학습에 쓰인 팩이라 오탐이 나오면 붙이는 과정이 틀린 것이다
-    (실측 오탐률은 0.21건/시간이라 한 세션에서 0건이 정상이다).
-    """
+    """학습에 쓴 정상 팩에서는 이상 판정이 나오지 않아야 한다."""
     model.reset_pack(NORMAL_PACK)
     states = {"normal": 0, "warning": 0, "anomaly": 0}
-    for row in measurements(NORMAL_PACK, "chg"):
+    for row in measurements(NORMAL_PACK):
         verdict = model.judge(row)
         if verdict is not None:
             states[verdict["state"]] += 1
 
-    assert states["normal"] > 500, f"판정 행이 너무 적다: {states}"
+    assert states["normal"] > 5, f"판정이 너무 적다: {states}"
     assert states["anomaly"] == 0, f"정상 팩에 이상 판정이 나왔다: {states}"
 
 
 def test_discharge_is_not_judged(model):
     """방전 구간은 한 건도 판정하지 않아야 한다.
 
-    모델은 충전 구간으로만 학습됐는데, 통전 게이트는 |I| 만 보고 부호는 보지
-    않는다. 막지 않으면 방전에서도 조용히 판정이 나온다.
+    모델은 충전 곡선으로만 학습됐다. 막지 않으면 방전에서도 조용히 판정이 나온다.
     """
     judged = [model.judge(row) for row in measurements(NORMAL_PACK, "dchg")]
     assert all(v is None for v in judged)
 
 
-def test_decimation_is_not_applied_twice(model):
-    """5초/행 입력이면 받은 행 대부분이 판정되어야 한다.
+def test_verdicts_come_at_the_repredict_cadence(model):
+    """판정이 REPREDICT_EVERY_ROWS 행마다 한 번씩 나오는가.
 
-    판정 행이 1/5 로 떨어지면 모델이 한 번 더 솎고 있다는 뜻이다.
-    (판정되지 않는 행은 충전 전후의 비통전·과도구간뿐이라야 한다)
+    새 모델은 행마다 판정하지 않는다(팩 단위 모델이라 그럴 수 없다). 판정
+    간격이 이 주기와 어긋나면 누적/재판정 조건이 틀어진 것이다.
     """
     model.reset_pack(NORMAL_PACK)
-    received = judged = 0
-    for row in measurements(NORMAL_PACK, "chg"):
-        received += 1
-        judged += model.judge(row) is not None
+    at = [i for i, row in enumerate(measurements(NORMAL_PACK))
+          if model.judge(row) is not None]
 
-    assert judged / received > 0.6, (
-        f"{received}행 중 {judged}행만 판정됐다. 두 번 솎고 있는지 stride 를 볼 것")
+    assert at, "판정이 한 건도 없다"
+    assert at[0] + 1 >= detector.MIN_ROWS, (
+        f"{at[0] + 1}행 만에 첫 판정이 나왔다. MIN_ROWS({detector.MIN_ROWS}) "
+        "전에는 근거가 모자라 판정하면 안 된다")
+    gaps = {b - a for a, b in zip(at, at[1:])}
+    assert gaps == {detector.REPREDICT_EVERY_ROWS}, (
+        f"판정 간격이 {sorted(gaps)} 다. {detector.REPREDICT_EVERY_ROWS}행마다 "
+        "한 번이어야 한다")
 
 
-def test_energized_filter_does_not_change_judgments(model):
-    """발행 쪽에서 비통전 행을 걸러도 판정 결과가 같아야 한다.
+def test_train_and_serve_build_the_same_pack(model):
+    """학습 경로(CSV)와 추론 경로(측정 행)가 같은 PackData 를 만드는가.
 
-    걸러진 행은 어차피 모델이 판정하지 않던 것이다. 판정 수나 warmup 이
-    달라지면 필터가 판정에 쓰이던 행까지 가져간 것이다.
+    **이 프로젝트에서 가장 조용히 틀어질 수 있는 곳이다.** 학습은 db/data 의
+    CSV 를 읽고 추론은 Kafka 행을 모으는데, 둘이 다른 전처리를 거치면 모델은
+    학습 때 못 본 모양을 받게 된다. 예외는 나지 않고 점수만 달라진다.
     """
-    def replay(energized_only: bool):
-        model.reset_pack(NORMAL_PACK)
-        model._pool.drop(NORMAL_PACK)
-        states, warmups, received = {}, 0, 0
-        for row in measurements(NORMAL_PACK, "chg", energized_only=energized_only):
-            received += 1
-            verdict = model.judge(row)
-            if verdict is not None:
-                states[verdict["state"]] = states.get(verdict["state"], 0) + 1
-                warmups += verdict["warmup"]
-        return received, states, warmups
+    import numpy as np
 
-    raw_received, raw_states, raw_warmups = replay(False)
-    filtered_received, filtered_states, filtered_warmups = replay(True)
+    import pack_loader
 
-    assert filtered_states == raw_states, "필터가 판정 결과를 바꿨다"
-    assert filtered_warmups == raw_warmups, "필터가 warmup 구간을 바꿨다"
-    assert filtered_received < raw_received, "필터가 아무것도 걸러내지 않았다"
+    rows = list(measurements(NORMAL_PACK))
+    from_stream = pack_loader.from_rows(rows, pack_id=str(NORMAL_PACK))
+    from_disk = pack_loader.from_csv(f"db/data/{NORMAL_PACK}_chg.csv")
+
+    assert len(from_stream.soc) == len(from_disk.soc), (
+        f"행 수가 다르다 - 스트림 {len(from_stream.soc)} / CSV {len(from_disk.soc)}")
+    for name in ("soc", "v_pack", "mod_dev", "cell_res", "temp"):
+        assert np.allclose(getattr(from_stream, name), getattr(from_disk, name)), (
+            f"{name} 이 두 경로에서 다르다")
 
 
-def test_session_gap_restarts_warmup(model):
-    """충전 세션 사이의 공백을 보고 모델 상태를 다시 시작하는가.
+def test_session_gap_starts_a_new_pack(model):
+    """충전 세션 사이의 공백을 보고 누적 버퍼를 비우는가.
 
-    발행 쪽이 비통전 행을 빼면서, 모델이 정지 행을 세어 세션 종료를 알아채던
-    길이 막혔다(StreamGate.idle_reset_rows). 대신 measured_at 의 공백으로 같은
-    판단을 한다 - 안 하면 두 세션이 이어 붙어 V2 기울기가 공백을 가로질러
-    계산되고 warmup 이 다시 돌지 않는다. **예외는 나지 않는다.**
+    발행 쪽이 비통전 행을 빼면서 정지 구간이 아예 오지 않으므로, measured_at
+    의 공백으로 세션 경계를 판단한다. 안 비우면 두 세션의 곡선이 이어 붙어
+    SOC 축이 두 번 왕복하고, 판정이 조용히 틀어진다. **예외는 나지 않는다.**
     """
     model.reset_pack(NORMAL_PACK)
-    model._pool.drop(NORMAL_PACK)
 
-    def replay(shift_days: int) -> int:
-        """한 세션을 흘리고 warmup 으로 표시된 판정 행 수를 돌려준다."""
-        return sum(
-            (verdict := model.judge(row)) is not None and verdict["warmup"]
-            for row in measurements(NORMAL_PACK, "chg", shift_days=shift_days))
+    def replay(shift_days: int) -> list:
+        return [i for i, row in enumerate(measurements(NORMAL_PACK, shift_days=shift_days))
+                if model.judge(row) is not None]
 
     first = replay(0)
     # 같은 팩이 사흘 뒤 다시 충전한다. 공백이 SESSION_GAP_SECONDS 를 넘으므로
-    # 새 세션으로 보고 warmup 부터 다시 시작해야 한다.
+    # 새 세션으로 보고 처음부터 다시 쌓아야 한다.
     second = replay(3)
 
-    assert first == model._pool.art.cfg.warmup_sec, (
-        f"첫 세션의 warmup 행이 {first} 다. {model._pool.art.cfg.warmup_sec} 여야 한다")
     assert second == first, (
-        f"두 번째 세션의 warmup 행이 {second} 다. 세션 공백을 못 알아채고 "
-        "앞 세션에 이어 붙였다")
+        f"두 번째 세션의 판정 시점이 {second[:3]}... 인데 첫 세션은 {first[:3]}... 다. "
+        "세션 공백을 못 알아채고 앞 세션에 이어 붙였다")
 
 
 def test_reset_lets_a_rewound_replay_through(model):
     """reset 뒤에 같은 구간을 다시 먹이면 처음처럼 판정되어야 한다.
 
-    전처리는 마지막으로 본 측정 시각을 들고 중복·역순을 걸러낸다. reset 이
-    그것까지 비우지 않으면, 되감은 재생이 통째로 '중복' 으로 버려지고
+    누적 버퍼는 마지막으로 본 측정 시각을 들고 역순 행을 걸러낸다. reset 이
+    그것까지 비우지 않으면, 되감은 재생이 통째로 '역순' 으로 버려지고
     **예외는 나지 않는다** - 판정만 조용히 0건이 된다.
     """
     def judged_rows() -> int:
         model.reset_pack(NORMAL_PACK)
-        return sum(model.judge(row) is not None
-                   for row in measurements(NORMAL_PACK, "chg"))
+        return sum(model.judge(row) is not None for row in measurements(NORMAL_PACK))
 
     first = judged_rows()
-    assert first > 500
-    assert judged_rows() == first, "되감은 재생이 중복으로 버려졌다"
+    assert first > 5
+    assert judged_rows() == first, "되감은 재생이 역순으로 버려졌다"
 
 
 def test_injected_cell_fault_is_detected_and_located(model):
     """셀 하나에 -60 mV 를 주입하면 이상 판정과 함께 그 셀을 짚어야 한다.
 
-    이것이 화면까지 이어지는 계약의 핵심이다 - state 만 맞고 지목이 틀리면
-    정비 대상이 엉뚱해진다.
+    데모 팩과 별개로, 정상 팩에 그 자리에서 주입해도 잡히는지 본다.
     """
     model.reset_pack(INJECT_PACK)
     anomalies = []
-    for row in measurements(INJECT_PACK, "chg",
-                            inject=("M08CV01", -60.0, 400, 800)):
+    for row in measurements(INJECT_PACK, inject=("M08CV01", -60.0, 400, 800)):
         verdict = model.judge(row)
         if verdict is not None and verdict["state"] == "anomaly":
             anomalies.append(verdict)
@@ -291,7 +330,7 @@ def test_injected_cell_fault_is_detected_and_located(model):
     assert first["module"] == 8, f"M08 을 짚어야 하는데 {first['module']}"
     assert first["cell"] == 1, f"CV01 을 짚어야 하는데 {first['cell']}"
     assert first["fault_type"], "이상인데 불량 유형이 비어 있다"
-    assert not first["warmup"], "주입 구간은 warmup 이 끝난 뒤여야 한다"
+    assert not first["warmup"], "anomaly 는 판정이 확정된 뒤에만 나와야 한다"
 
 
 def test_verdict_matches_published_schema(model):
@@ -308,7 +347,7 @@ def test_verdict_matches_published_schema(model):
 
     model.reset_pack(NORMAL_PACK)
     checked = 0
-    for row in measurements(NORMAL_PACK, "chg"):
+    for row in measurements(NORMAL_PACK):
         verdict = model.judge(row)
         if verdict is None:
             continue
@@ -321,10 +360,8 @@ def test_verdict_matches_published_schema(model):
         }
         jsonschema.validate(message, schema)
         checked += 1
-        if checked >= 20:      # 앞쪽 20건이면 warmup 구간까지 포함된다
-            break
 
-    assert checked == 20
+    assert checked > 5, f"검사한 판정이 {checked}건뿐이다"
 
 
 def test_state_labels_are_the_contract(model):
@@ -333,22 +370,20 @@ def test_state_labels_are_the_contract(model):
 
 
 @pytest.mark.parametrize("label, expected", [
-    ("용량불량(M08CV01, conf 0.82)", (8, 1)),
-    ("용접불량(M05, conf 0.71)", (5, None)),
-    ("센서불량(M16T02, conf 0.90)", (16, None)),
-    ("V9:M08CV01", (8, 1)),
-    ("V8:M08CV01-CV02", (8, 1)),         # 인접 쌍이면 앞쪽 셀을 짚는다
-    ("V5:M16", (16, None)),
-    ("정상(-, conf 0.00)", (None, None)),
+    ("M07", (7, None)),                  # 용접불량 - 모듈까지만
+    ("M09CV03", (9, 3)),                 # 용량불량 - 셀까지
+    ("M05CV06-CV07", (5, 6)),            # 센싱와이어 - 인접 쌍이면 앞쪽 셀
+    ("M01T02", (1, None)),               # 온도 센서 - 셀이 없다
+    ("M14 센서쌍", (14, None)),           # 모듈 안 두 센서의 차
     ("", (None, None)),
     ("M99CV01", (None, None)),           # 범위를 벗어나면 지목하지 않는다
     ("M08CV99", (8, None)),              # 모듈만 살린다
 ])
 def test_location_parsing(label, expected):
-    """모델의 라벨을 화면이 쓰는 번호로 옮기는 부분.
+    """모델의 지목 라벨을 화면이 쓰는 번호로 옮기는 부분.
 
-    라벨 형식은 step5_normalize.column_labels 와 step8_classify.Diagnosis 가
-    정한다. 모델을 새로 받을 때 여기부터 깨진다.
+    라벨 형식은 battery_anomaly.locate_cell / locate_temp 와 predict 의
+    component 가 정한다. 모델을 새로 받을 때 여기부터 깨진다.
     """
     assert detector._parse_location(label) == expected
 
@@ -360,6 +395,92 @@ def test_location_parsing(label, expected):
 # 실제로 도넛 캡션이 module 하나만 확인하고 두 값을 함께 찍다가, 셀 없는
 # 알람이 처음 뜨는 순간 화면 전체가 TypeError 로 멈췄다.
 # --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fault_type, expected", [
+    ("셀 단위 이상", "셀이상"),
+    ("용접불량", "용접"),
+    ("센서불량", "센서"),
+    ("셀 단위 이상, 용접불량", "셀이상+용접"),   # 스트림이 둘 걸리면 둘 다 적는다
+    ("", ""),                                  # 정상이면 유형이 없다
+    ("새 유형", "새 유형"),                     # 모르는 유형은 원문 그대로 (안 깨진다)
+])
+def test_fault_short(fault_type, expected):
+    """불량 유형을 목록 배지용 짧은 이름으로 줄이는 부분.
+
+    팩 단위 모델은 세 스트림을 따로 채점해 걸린 것을 전부 돌려주므로 유형이
+    둘 이상 나올 수 있다. 첫 번째만 보여주면 나머지를 놓친다.
+    """
+    import app
+
+    assert app.fault_short(fault_type) == expected
+
+
+_seq = itertools.count()
+
+
+def _verdict(serial, state, fault_type, module, cell, warmup):
+    """판정 메시지 한 건. detector.judge 가 내는 모양 그대로.
+
+    verdict_id 는 부를 때마다 달라야 한다. VerdictBuffer 가 그 값으로 중복을
+    거르므로, 같은 id 로 두 번 넣으면 두 번째가 조용히 버려진다.
+    """
+    unique = next(_seq)
+    return {"verdict_id": f"v{serial}-{unique}", "event_id": f"e{serial}-{unique}",
+            "serial_number": serial, "mode": "chg", "seq": 90,
+            "measured_at": "2026-08-24T08:00:00+09:00",
+            "state": state, "module": module, "cell": cell,
+            "fault_type": fault_type, "warmup": warmup,
+            "detail": fault_type or "이상 없음",
+            "model": {"name": "battery-anomaly-ae", "version": "7.505"}}
+
+
+def test_provisional_verdicts_stay_out_of_the_history():
+    """미확정 판정(warmup)은 알림·지목 이력에 남지 않아야 한다.
+
+    팩 단위 모델의 판정은 SOC 칸이 덜 찬 동안 실제로 뒤집힌다 - DEMO08 은
+    세션 초반에 '용접불량 M02' 였다가 확정 시점에 '센서불량 M14' 가 된다.
+    그것을 이력에 남기면 최종 결과가 정상인 팩에도 '이상 1건' 이 영구히 붙어
+    검사 결과판이 거짓말을 한다.
+    """
+    from battery_pack_defect_detection.consumer import VerdictBuffer
+
+    buffer = VerdictBuffer()
+    buffer.add(_verdict(9008, "warning", "용접불량", 2, None, warmup=True))
+    buffer.add(_verdict(9008, "anomaly", "센서불량", 14, None, warmup=False))
+
+    assert [a["state"] for a in buffer.recent_alerts()] == ["anomaly"]
+    assert buffer.flagged_modules(9008, "chg") == {14: "anomaly"}
+    # results 는 '지금 판정' 이라 미확정도 그대로 보여준다 - 이력과 쓰임이 다르다
+    assert [v["serial_number"] for v in buffer.results()] == [9008]
+
+
+def test_screen_survives_every_verdict_shape():
+    """화면이 판정의 모든 모양을 받아도 죽지 않아야 한다.
+
+    실제로 도넛 캡션이 module 하나만 확인하고 두 값을 함께 찍다가, 셀 없는
+    알람이 처음 뜨는 순간 화면 전체가 TypeError 로 멈춘 적이 있다. 유형별로
+    짚는 단위가 다른 것이 원인이라, 모양을 전부 한 번씩 태워 본다.
+    """
+    import app
+    from battery_pack_defect_detection.consumer import VerdictBuffer
+
+    shapes = [
+        _verdict(9001, "normal", "", None, None, False),          # 정상
+        _verdict(9003, "anomaly", "용접불량", 7, None, False),      # 모듈까지
+        _verdict(9005, "anomaly", "셀 단위 이상", 5, 6, False),      # 셀까지
+        _verdict(9007, "warning", "센서불량", 1, None, True),       # 미확정
+    ]
+    buffer = VerdictBuffer()
+    for shape in shapes:
+        buffer.add(shape)
+
+    window = pd.DataFrame({"measured_at": pd.date_range("2026-08-24", periods=10, freq="5s")})
+    for shape in shapes:
+        app.render_verdict(shape, window)
+    app.render_verdict(None, window)              # 판정 대기 중
+    app.render_results(buffer, 9003)
+    app.render_results(VerdictBuffer(), None)     # 아직 아무 팩도 판정 전
+
 
 @pytest.mark.parametrize("module, cell, expected", [
     (8, 1, "M08 CV01"),      # 용량불량 / 센싱와이어불량 - 셀까지 짚는다

@@ -3,7 +3,7 @@
     Kafka(battery.pack.measurement)
         │  컨슈머 스레드 (group.id = api-measurement-consumer)
         ▼
-    detector.judge()          <- 이상탐지 모델 (battery_detector.DetectorPool)
+    detector.judge()          <- 이상탐지 모델 (battery_anomaly.BatteryAnomalyModel)
         │  판정한 행만 발행한다. 정상도 발행한다 - 화면이 이 결과로 색을 칠한다
         ▼
     Kafka(battery.pack.verdict)
@@ -34,14 +34,19 @@ HTTP 는 상태 확인과 디버깅에 쓴다.
 """
 
 import json
+import logging
 import os
+import subprocess
+import sys
 import threading
 import uuid
 from collections import Counter, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
-from confluent_kafka import Producer
+from confluent_kafka import OFFSET_END, Producer, TopicPartition
+from confluent_kafka.admin import AdminClient
 from fastapi import FastAPI, HTTPException
 
 from battery_pack_defect_detection import consumer as kc
@@ -50,6 +55,14 @@ from battery_pack_defect_detection import detector
 # --------------------------------------------------------------------------
 # 설정
 # --------------------------------------------------------------------------
+
+# uvicorn 이 이미 로깅을 설정해 두므로 핸들러를 붙이지 않는다.
+# 이름만 나눠 두면 api 로그에서 어느 줄이 이 파일 것인지 보인다.
+log = logging.getLogger("battery.api")
+
+# generator 를 띄울 때 쓰는 작업 디렉터리. sensor_generator.py 와
+# database.py 가 여기 있다.
+REPO_ROOT = Path(__file__).resolve().parent
 
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 
@@ -202,9 +215,11 @@ async def lifespan(app: FastAPI):
 
     yield   # ---- 여기서 서버가 요청을 받는다 ----
 
-    # 종료: 컨슈머를 세우고, 큐에 남은 판정을 마저 내보낸다.
+    # 종료: 재생을 세우고, 컨슈머를 세우고, 큐에 남은 판정을 마저 내보낸다.
+    # 재생을 먼저 세우는 이유는 그것이 측정을 계속 밀어 넣는 쪽이라서다.
     # flush 없이 죽으면 큐에 있던 판정이 전송 시도조차 없이 사라진다
     # (sensor_generator 5단계의 try/finally 와 같은 원리).
+    replay.stop()
     pipe.consumer.stop()
     pipe.producer.flush(10)
 
@@ -285,6 +300,183 @@ def recent_verdicts(limit: int = 20):
     with pipe.lock:
         items = list(pipe.recent)
     return items[-limit:][::-1]   # 최신이 앞에 오게
+
+
+def purge_topics() -> dict[str, int]:
+    """측정·판정 토픽의 기록을 지운다. 토픽별로 지운 파티션 수를 돌려준다.
+
+    토픽을 삭제했다가 다시 만들지 않는다. 삭제는 구독 중인 컨슈머를 전부
+    떼어냈다 붙여야 하고(리밸런스가 30초쯤 걸린다), 파티션 수 같은 설정을
+    되살릴 책임이 생긴다. delete_records 는 로그의 시작점을 끝으로 밀어
+    기록만 버리므로 토픽·파티션·구독이 그대로 남는다.
+
+    컨슈머는 이미 끝까지 읽은 자리에 있으므로 이 조작에 영향을 받지 않는다.
+    뒤처진 컨슈머가 있으면 그 자리가 사라져 auto.offset.reset 규칙대로
+    다시 잡는데, 어차피 지우려던 데이터라 잃을 것이 없다.
+    """
+    admin = AdminClient({"bootstrap.servers": KAFKA_BROKER})
+    meta = admin.list_topics(timeout=10)
+
+    targets, purged = [], {}
+    for name in (kc.TOPIC, VERDICT_TOPIC):
+        topic = meta.topics.get(name)
+        if topic is None or topic.error is not None:
+            purged[name] = 0
+            continue
+        targets += [TopicPartition(name, p, OFFSET_END) for p in topic.partitions]
+        purged[name] = len(topic.partitions)
+
+    if targets:
+        for part, future in admin.delete_records(targets).items():
+            # 파티션 하나가 실패해도 나머지는 지운다. 되돌릴 것이 없는
+            # 조작이라 중간에 멈추면 반만 지워진 상태로 남는다.
+            try:
+                future.result(timeout=10)
+            except Exception as error:      # noqa: BLE001
+                log.warning("기록 삭제 실패 %s: %s", part, error)
+                purged[part.topic] -= 1
+    return purged
+
+
+class Replay:
+    """generator 프로세스 하나를 들고 있는 자리.
+
+    api 가 재생을 맡는 이유: 화면(streamlit)은 몇 초마다 스크립트를 통째로
+    다시 실행하므로 자식 프로세스를 들고 있기에 적당하지 않다. api 는 오래
+    사는 단일 프로세스이고, 이미 파이프라인의 다른 상태(모델·카운터)를
+    들고 있다.
+
+    한 번에 하나만 돈다. 둘이 동시에 같은 데이터를 흘리면 seq 가 겹쳐
+    컨슈머의 유실·중복 집계가 통째로 무의미해진다.
+    """
+
+    def __init__(self) -> None:
+        self.process: subprocess.Popen | None = None
+        self.started_at: datetime | None = None
+        self.command: list[str] = []
+        self.lock = threading.Lock()
+
+    def running(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
+    def state(self) -> dict:
+        with self.lock:
+            alive = self.running()
+            return {
+                "running": alive,
+                "pid": self.process.pid if self.process else None,
+                "started_at": self.started_at.isoformat() if self.started_at else None,
+                "command": self.command,
+                # 끝난 뒤에만 값이 있다. 0 이면 정상 종료, 음수면 신호로 죽었다
+                "returncode": None if alive or self.process is None
+                              else self.process.returncode,
+            }
+
+    def stop(self, timeout: float = 10.0) -> bool:
+        """돌고 있으면 세운다. 세웠으면 True.
+
+        terminate 로 SIGTERM 을 보낸다. generator 는 그것을 KeyboardInterrupt
+        처럼 받지는 않지만, 발행 루프가 죽어도 이미 브로커에 들어간 것은
+        남는다 - 재생 도구라 중간에 끊겨도 잃을 상태가 없다.
+        """
+        with self.lock:
+            if not self.running():
+                return False
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+            return True
+
+
+replay = Replay()
+
+
+@app.get("/replay")
+def replay_state():
+    """지금 재생이 도는지. 화면의 버튼이 이 값으로 재생/정지를 고른다."""
+    return replay.state()
+
+
+@app.post("/replay/start")
+def replay_start(interval: float = 0.15, serial: int | None = None,
+                 limit: int | None = None, original: bool = False,
+                 reset_first: bool = True):
+    """generator 를 띄워 측정을 흘린다.
+
+    **reset_first 가 기본으로 참이다.** 같은 데이터를 다시 흘리는 것이라
+    measured_at 이 마지막으로 본 시각보다 이르고, 모델이 그런 행을 전부
+    '역순 도착' 으로 버린다(detector 의 '판정하지 않는 행'). 비우지 않고
+    다시 누르면 **예외 없이 판정이 0건**이 되므로, 누르는 쪽이 매번 순서를
+    기억하게 두지 않는다.
+    """
+    if replay.running():
+        raise HTTPException(409, "이미 재생 중입니다. 먼저 정지하세요")
+    if interval < 0:
+        raise HTTPException(400, "interval 은 0 이상이어야 합니다")
+
+    if reset_first:
+        reset()
+
+    command = [sys.executable, "sensor_generator.py", "--interval", str(interval)]
+    if serial is not None:
+        command += ["--serial", str(serial)]
+    if limit is not None:
+        command += ["--limit", str(limit)]
+    if original:
+        command.append("--original")
+
+    with replay.lock:
+        # cwd 를 저장소 루트로 준다. generator 가 database.py 를 import 하고
+        # database 는 DATABASE_URL 을 환경에서 읽으므로 env 는 그대로 물려준다.
+        replay.process = subprocess.Popen(
+            command, cwd=str(REPO_ROOT),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        replay.started_at = datetime.now(timezone.utc)
+        replay.command = command
+    log.info("재생 시작 pid=%s %s", replay.process.pid, " ".join(command))
+    return replay.state()
+
+
+@app.post("/replay/stop")
+def replay_stop():
+    """재생을 세운다. 안 돌고 있으면 stopped=False 를 돌려준다."""
+    stopped = replay.stop()
+    log.info("재생 정지 요청 - %s", "세웠다" if stopped else "돌고 있지 않았다")
+    return {"stopped": stopped, **replay.state()}
+
+
+@app.post("/reset")
+def reset():
+    """재생을 처음부터 다시 하려고 파이프라인을 통째로 비운다.
+
+    세 겹을 다 비워야 한다. 하나라도 남으면 다시 흘렸을 때 조용히 어긋난다.
+
+        1) 모델 상태   팩별 누적 버퍼. 안 비우면 되감은 재생이 전부
+                       '역순 도착' 으로 버려져 판정이 0건이 된다
+        2) 파이프라인  수신·판정·발행 카운터와 최근 판정 목록
+        3) Kafka       측정·판정 토픽의 기록
+
+    화면(streamlit)의 버퍼는 여기서 못 비운다. 다른 프로세스의 메모리라
+    부르는 쪽이 자기 것을 따로 비운다.
+    """
+    packs = detector.reset_all()
+
+    with pipe.lock:
+        pipe.judged.clear()
+        pipe.skipped = 0
+        pipe.published = 0
+        pipe.publish_errors = 0
+        pipe.latest.clear()
+        pipe.recent.clear()
+    if pipe.buffer is not None:
+        pipe.buffer.__init__()          # 측정 버퍼도 처음 상태로
+
+    purged = purge_topics()
+    log.info("초기화: 팩 %d개, 토픽 기록 %s", packs, purged)
+    return {"reset": True, "packs": packs, "topics": purged}
 
 
 @app.post("/packs/{serial_number}/reset")

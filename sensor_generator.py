@@ -5,13 +5,21 @@ Postgres 에서 읽은 측정 이력을 Kafka 메시지로 바꿔 발행한다.
 
 메시지 형식은 docs/kafka-message-spec.md 와 kafkadata.json 을 따른다.
 
-원본은 전부 정상 팩이라 그대로 재생하면 이상 판정이 한 번도 안 나온다.
---anomaly-every 를 주면 구간마다 주기적으로 셀 하나를 골라 전압을 띄운
-'이상치 버스트' 를 섞어 보낸다(3단계 참고). api 의 검출·화면의 알림까지
-끝에서 끝으로 확인하려면 이 옵션으로 재생한다.
+2026-08-27 결정: 기본 재생 대상을 데모 팩 9개(DEMO01~09)로 바꿨다.
 
-    python sensor_generator.py                       # 정상 데이터만
-    python sensor_generator.py --anomaly-every 120   # 120행마다 이상치 버스트
+원본 50팩은 전부 정상이라 그대로 재생하면 이상 판정이 한 번도 안 나오고,
+전량 재생에 32시간이 걸려 발표에서 쓸 수가 없었다. 데모 팩은 실제 팩의 편차
+패턴 위에 고장을 주입해 만든 것이라(database.DEMO_SERIALS 주석 참고) 모델이
+실제로 판정하고, 무엇을 심었는지 아는 데이터라 화면의 판정을 정답과 대조할 수
+있다. 9팩 7,344건, 3초 주기로 팩당 41분이다.
+
+    python sensor_generator.py                  # 데모 9팩 (DEMO01 -> DEMO09)
+    python sensor_generator.py --serial 9005    # 데모 한 팩만
+    python sensor_generator.py --original       # 예전 원본 50팩 재생
+
+--anomaly-every 는 원본을 재생하던 시절에 정상 데이터를 억지로 흔들어 알람을
+띄우려고 만든 것이다(3단계 참고). 데모 팩에는 이미 고장이 들어 있으므로 같이
+쓸 일이 없고, 쓰면 정답표와 대조가 안 된다.
 """
 
 import argparse
@@ -347,11 +355,16 @@ def run(serial_number: int | None = None,
         mode: str | None = None,
         interval: float = SEND_INTERVAL_SECONDS,
         limit: int | None = None,
-        anomaly: AnomalyPlan | None = None) -> int:
+        anomaly: AnomalyPlan | None = None,
+        demo: bool = True) -> int:
     '''DB 를 훑어 Kafka 로 흘려보낸다. 발행한 건수를 돌려준다.
 
     anomaly 를 주면 그 계획대로 일부 행을 띄워 보낸다(3단계). 띄운 행은
     label 이 "defect" 로 나가므로, 컨슈머 쪽에서 판정과 정답을 맞춰 볼 수 있다.
+
+    demo 가 참이면(기본) 데모 팩 9개만 DEMO01 -> DEMO09 순으로 나간다.
+    거짓이면 예전처럼 원본 50팩을 재생한다. 무엇이 나갈지는 전부 database
+    쪽 WHERE 절이 정하고, 이 함수는 받은 행을 순서대로 흘려보내기만 한다.
 
     행 순서는 database 가 정한 그대로다 - 팩 오름차순, 팩마다 chg -> dchg.
     팀이 정한 재생 순서가 이미 SQL 의 ORDER BY 에서 나오므로 여기서 다시
@@ -372,7 +385,7 @@ def run(serial_number: int | None = None,
     section = None          # 지금 어느 (serial, mode) 구간인가
 
     try:
-        for row in database.iter_measurements(serial_number, mode):
+        for row in database.iter_measurements(serial_number, mode, demo=demo):
             here = (row["serial_number"], row["mode"])
             if here != section:
                 if section is not None:
@@ -380,6 +393,17 @@ def run(serial_number: int | None = None,
                 section, seq = here, 0
                 if anomaly is not None:
                     anomaly.reset()
+
+                # 데모 팩이면 무엇을 심었는지 먼저 알린다. 화면의 판정이
+                # 나오는 것을 보면서 정답과 맞춰 봐야 하는데, 정답표를 따로
+                # 띄워 놓고 대조하는 것보다 로그에 같이 찍히는 편이 낫다.
+                # 원본 팩(1000~1050)은 DEMO_PACKS 에 없어 그냥 넘어간다.
+                meta = database.DEMO_PACKS.get(here[0])
+                if meta is not None:
+                    fault = (f"{meta['fault']} {meta['location']} {meta['magnitude']}"
+                             if meta["fault"] else "고장 없음")
+                    print(f"  {meta['pack_id']} ({here[0]}) 시작 - "
+                          f"주입: {fault} / 기대 판정: {meta['expect']}")
 
             touched = False
             if anomaly is not None:
@@ -411,9 +435,14 @@ def run(serial_number: int | None = None,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--serial", type=int, help="팩 하나만 재생한다")
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--serial", type=int,
+                        help="팩 하나만 재생한다 (데모는 9001~9009)")
     parser.add_argument("--mode", choices=["chg", "dchg"], help="충전/방전 하나만")
+    parser.add_argument("--original", action="store_true",
+                        help="데모 대신 예전 원본 50팩(1000~1050)을 재생한다")
     parser.add_argument("--interval", type=float, default=SEND_INTERVAL_SECONDS,
                         help=f"발행 간격(초). 기본 {SEND_INTERVAL_SECONDS}")
     parser.add_argument("--limit", type=int, help="이 건수만 보내고 멈춘다")
@@ -421,7 +450,8 @@ def main() -> None:
     group = parser.add_argument_group(
         "이상치 주입",
         "구간마다 every 번째 행부터 셀 하나를 골라 burst 행 연속으로 띄운다. "
-        "안 주면 정상 데이터만 나간다.")
+        "원본(--original)을 재생할 때 쓰던 것이다. 데모 팩에는 이미 고장이 "
+        "들어 있어 같이 쓸 일이 없다.")
     group.add_argument("--anomaly-every", type=int, metavar="N",
                        help="구간 안에서 N행마다 이상치 버스트를 시작한다")
     group.add_argument("--anomaly-burst", type=int, default=DEFAULT_ANOMALY_BURST,
@@ -434,6 +464,21 @@ def main() -> None:
                        help="표적 셀을 고르는 난수 시드. 주면 같은 자리에 다시 뜬다")
     args = parser.parse_args()
 
+    demo = not args.original
+
+    # 조용히 0건으로 끝나는 조합을 미리 막는다. iter_measurements 는 조건에
+    # 맞는 행이 없으면 그냥 아무것도 내놓지 않아서, 여기서 안 걸러 주면
+    # "발행 0건" 만 보고 왜 그런지 알 수 없다.
+    if demo:
+        if args.mode == "dchg":
+            parser.error("데모 팩은 충전 구간뿐이다. 방전을 보려면 --original")
+        if args.serial is not None and args.serial not in database.DEMO_SERIALS:
+            parser.error(
+                f"{args.serial} 은 데모 팩이 아니다. "
+                f"데모는 9001~9009 이고, 원본을 재생하려면 --original 을 준다")
+    elif args.serial is not None and args.serial in database.DEMO_SERIALS:
+        parser.error(f"{args.serial} 은 데모 팩이다. --original 을 빼고 부른다")
+
     plan = None
     if args.anomaly_every is not None:
         if args.anomaly_every < 1:
@@ -441,14 +486,25 @@ def main() -> None:
         if args.anomaly_burst < 3:
             print("  (anomaly-burst 가 3보다 작으면 지속 조건(2행)을 못 넘겨 "
                   "알람이 안 뜬다)")
+        if demo:
+            print("  (데모 팩에는 이미 고장이 들어 있다. 여기에 또 띄우면 "
+                  "정답표와 대조가 안 된다)")
         plan = AnomalyPlan(args.anomaly_every, args.anomaly_burst,
                            args.anomaly_mv, args.seed)
         print(f"이상치 주입: {args.anomaly_every}행마다 "
               f"{args.anomaly_burst}건 연속 {args.anomaly_mv:+.0f}mV")
 
+    if demo:
+        packs = ([args.serial] if args.serial is not None
+                 else sorted(database.DEMO_SERIALS))
+        print(f"데모 팩 {len(packs)}개를 재생합니다: "
+              + ", ".join(database.DEMO_PACKS[s]["pack_id"] for s in packs))
+    else:
+        print("원본 50팩을 재생합니다 (--original).")
+
     print(f"토픽 {TOPIC} 으로 {args.interval}초에 1건씩 발행합니다. (Ctrl+C 로 중단)")
     started = time.time()
-    sent = run(args.serial, args.mode, args.interval, args.limit, plan)
+    sent = run(args.serial, args.mode, args.interval, args.limit, plan, demo)
     print(f"총 {sent:,}건 / {time.time() - started:.1f}초")
 
 

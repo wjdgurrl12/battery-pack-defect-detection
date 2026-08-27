@@ -51,13 +51,20 @@ TEMP_COLUMNS = [f"M{m:02d}T{s:02d}" for m in range(1, 17) for s in range(1, 3)]
 
 
 def connect() -> psycopg.Connection:
-    """docker-compose 가 넣어 주는 DATABASE_URL 로 붙는다."""
+    """docker-compose 가 넣어 주는 DATABASE_URL 로 붙는다.
+
+    URL 에서 SQLAlchemy 방언 접두사를 떼고 넘긴다. docker-compose 는
+    postgresql+psycopg:// 형태를 넣어 주는데(database.py 가 SQLAlchemy 로
+    쓰려면 그래야 한다), psycopg 에 그대로 주면 connection info string 을
+    파싱하지 못해 ProgrammingError 로 거절한다. 붙는 대상은 같은 DB 이므로
+    여기서 한 줄로 맞춘다.
+    """
     import os
     url = os.environ.get("DATABASE_URL")
     if not url:
         sys.exit("DATABASE_URL 이 없습니다. 컨테이너 안에서 실행하세요:\n"
                  "  docker compose exec dev python load_raw.py")
-    return psycopg.connect(url)
+    return psycopg.connect(url.replace("postgresql+psycopg://", "postgresql://", 1))
 
 
 def ensure_schema(conn: psycopg.Connection) -> None:

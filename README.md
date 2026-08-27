@@ -59,7 +59,8 @@ db/data/*.csv ─▶ Postgres ─▶ sensor_generator ─▶ Kafka(측정)
 - `main.py` — api. 측정을 구독해 모델로 판정하고 판정 토픽으로 발행한다
 - `app.py` — 대시보드. 판정은 하지 않고 받은 것만 칠한다
 - `src/battery_pack_defect_detection/` — 공용 패키지 (`consumer.py`, `detector.py`)
-- `battery_detector.py` + `src/step*.py` + `models/*.bundle` — 이상탐지 모델
+- `battery_anomaly.py` + `pack_loader.py` + `models/battery_anomaly.pkl` — 이상탐지 모델
+  (학습은 `train_anomaly.py`. 2026-08-27 이전의 행 단위 모델은 `old/` 에 있다)
 - `tests/test_smoke.py` — 환경 확인용 / `tests/test_detector.py` — 모델 확인용
 
 ## 문서
@@ -69,5 +70,7 @@ db/data/*.csv ─▶ Postgres ─▶ sensor_generator ─▶ Kafka(측정)
 | [`docs/dev-environment.md`](docs/dev-environment.md) | **개발환경 전체** — 서비스·포트·환경변수·자주 쓰는 명령·함정 |
 | [`docs/pipeline-overview.md`](docs/pipeline-overview.md) | 파이프라인 동작 원리, 판정 로직, 주기 |
 | [`docs/kafka-message-spec.md`](docs/kafka-message-spec.md) | 측정 메시지 필드 명세 |
-| [`src/README.md`](src/README.md) | 모델팀 인수인계 문서 |
+| [`docs/ae_model.md`](docs/ae_model.md) | 모델 설계 근거 — AE 구조·비교·견고성 검증 |
+| [`docs/diagnostics.md`](docs/diagnostics.md) · [`joint_anomaly.md`](docs/joint_anomaly.md) | 검출 구조 진단·조합 이상 탐색 실험 기록 |
+| [`old/README.md`](old/README.md) | 2026-08-27 이전의 행 단위 모델 (쓰지 않는다) |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 의존성 추가, 이미지 갱신, 컨테이너가 안 뜰 때 |

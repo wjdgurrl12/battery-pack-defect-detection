@@ -26,8 +26,8 @@
         │
         ├──────────────▶ api (main.py)  group.id = api-measurement-consumer
         │                    │  detector.judge()  ← 이상탐지 모델 (정상도 발행한다)
-        │                    │                      models/battery_model_*.bundle
-        │                    │                      + src/step*.py (학습 코드 그대로 import)
+        │                    │                      models/battery_anomaly.pkl
+        │                    │                      팩 단위 판정. 30행마다 누적분으로 재판정
         │                    ▼
         │               Kafka  topic: battery.pack.verdict  (schema_version 2.1.0)
         │                    │
@@ -52,7 +52,7 @@ Streamlit 은 스스로 판단하지 않고 **받은 판정을 그대로 칠하�
 | **원본 데이터의 측정 간격** | 1초 / 5초 혼재 → **5초로 통일** | `database.py` `RESAMPLE_SECONDS = 5` |
 | **Kafka 발행 (측정)** | **3초에 1건** | `sensor_generator.py` `SEND_INTERVAL_SECONDS = 3` (`--interval` 로 변경) |
 | **판정 (api)** | 측정이 **도착하는 즉시** (주기 없음) | `main.py` `handle_measurement` — 컨슈머 콜백에서 동기 실행 |
-| **모델이 기대하는 격자** | **5초 / 행** (`RESAMPLE_SECONDS` 와 같아야 한다) | `detector.MEASUREMENT_SECONDS` / 번들 `manifest.target_sec_per_row` |
+| **모델이 기대하는 격자** | **5초 / 행** (`RESAMPLE_SECONDS` 와 같아야 한다) | `detector.MEASUREMENT_SECONDS` |
 | **Kafka 발행 (판정)** | 충전 측정 1건당 판정 1건 → 실질 **3초에 1건**. 방전·비통전·과도구간은 발행 없음 | `main.py` `VERDICT_TOPIC` |
 | 판정 1건 처리 시간 | 약 **5.6 ms** (예산 5,000 ms 대비 900배 여유) | 측정 실측. 컨슈머 콜백에서 동기 실행해도 밀리지 않는 근거 |
 | **Streamlit 화면 갱신** | **3초** | `app.py` `REFRESH_EVERY = "3s"` |
@@ -85,7 +85,10 @@ Streamlit 은 스스로 판단하지 않고 **받은 판정을 그대로 칠하�
 | `database.py` | Postgres → dict 스트림 | 배제 규칙과 5초 정규화를 **읽는 시점에** 적용. 기준이 바뀌어도 600MB 재적재가 없다 |
 | `sensor_generator.py` | dict → Kafka 메시지 | 명세(v1.2.0) 형태로 접어서 3초에 1건 발행 |
 | `src/…/consumer.py` | Kafka → 버퍼 | api·streamlit 이 **함께 쓰는** 컨슈머. 측정용/판정용 두 벌 |
-| `battery_detector.py` (루트) | 모델 | 모델팀 인수인계본. 전처리 게이트 + 검출기. Kafka·FastAPI 를 모른다 |
+| `battery_anomaly.py` (루트) | 모델 | 모델팀 인수인계본. 오토인코더 2개 + 로버스트 통계. Kafka·FastAPI 를 모른다 |
+| `pack_loader.py` (루트) | 모델 | 측정 → `PackData`. 학습과 추론이 같은 전처리를 거치게 한다 |
+| `train_anomaly.py` (루트) | 모델 | 정상 50팩 학습 + 데모 9팩 검증 |
+| `old/` | — | 2026-08-27 이전의 행 단위 모델. 어디에서도 import 하지 않는다 |
 | `src/…/detector.py` | 판정 | 측정 메시지 ↔ 모델 사이의 **번역**. 판정 안 한 행은 `None` |
 | `main.py` (api) | 구독 → 판정 → 발행 | 파이프라인의 심장. HTTP 는 들여다보는 창일 뿐 |
 | `app.py` (streamlit) | 화면 | 측정으로 차트를, 판정으로 색을 칠한다. 판단은 하지 않는다 |
@@ -320,7 +323,7 @@ key   = b'1000'            헤더 = [('mode', b'chg')]
 | `module` | 1~16 \| **null** | 문제 모듈(M01~M16). 지목이 없으면 `null` |
 | `cell` | 1~11 \| **null** | 문제 셀(CV01~CV11). 지목이 없으면 `null` |
 | `fault_type` | string | **2.1.0 추가.** 불량 유형. `anomaly` 일 때만 채워진다 |
-| `warmup` | boolean | **2.1.0 추가.** `true` 면 **온도 판정 보류 중** |
+| `warmup` | boolean | **2.1.0 추가.** `true` 면 **판정이 아직 확정 전**(2026-08-27 뜻이 바뀌었다 — 아래) |
 | `detail` | string | 사람이 읽는 요약. `"용량불량 M08 CV01"` / `"이상 없음"` |
 | `model` | `{name, version}` | 이 판정을 낸 모델. 과거 알림이 어느 모델의 판단인지 남는다 |
 
@@ -330,19 +333,28 @@ key   = b'1000'            헤더 = [('mode', b'chg')]
 나가는 것은 판정과 지목뿐이다. 화면이 쓰는 것은 `state` 와 `module` 둘뿐이라,
 타일 16개 중 지목된 하나만 상태색이고 나머지는 중립색이다.
 
-#### `state` 세 값이 모델의 무엇인가
+#### `state` 세 값이 모델의 무엇인가 (2026-08-27 개정)
 
-모델은 점수가 임계를 넘은 행이 **2 판정행(=10초) 이어져야** 알람을 낸다.
-화면의 3단계는 그 지속 조건의 중간 상태를 그대로 쓴다.
+**판정 단위가 행에서 팩(충전 세션)으로 바뀌면서 기준도 바뀌었다.** 예전 모델에는
+'지속 조건(2 판정행)' 이 있었지만 새 모델에는 없다. 대신 **SOC 16칸이 얼마나
+찼는가** 가 판정의 신뢰도를 가른다.
+
+모델은 세션 전체의 곡선을 SOC 16칸으로 접어서 본다. 세션 초반에는 높은 SOC 칸이
+통째로 비어 있고, 모델은 빈 칸을 앞뒤 값으로 보간해 채운다 — 그 보간값으로 낸
+점수는 지어낸 값이다. 실측으로 세션 절반(칸 8/16)을 넘기면 판정이 더 뒤집히지
+않았다.
 
 | `state` | 모델의 상태 | 지목 |
 |---|---|---|
-| `normal` | 점수 ≤ 임계 | 없음 |
-| `warning` | 점수 > 임계, **지속 조건 미달**(초과 1행째) | **없음** |
-| `anomaly` | 지속 조건 충족 → 알람 | 있음 |
+| `normal` | 이상 없음 | 없음 |
+| `warning` | 이상이 잡혔으나 SOC 칸이 8/16 미만이라 **미확정** | **있다** |
+| `anomaly` | SOC 칸이 충분히 찬 상태에서 이상 | 있다 |
 
-`warning` 에 지목이 없는 것이 정상이다. 원인 분석(SPE 기여도 분해 + 유형 분류)은
-알람이 뜬 시점에만 계산한다 — 평시 비용을 낮추려는 모델 쪽 설계다.
+**`warning` 에도 지목이 실린다** — 예전에는 비어 있었다. 새 모델은 판정과 지목을
+같이 내므로 지울 이유가 없고, 화면이 미확정 구간에도 어느 모듈을 의심하는지
+보여줄 수 있는 편이 낫다.
+
+SOC 칸이 4/16 에 못 미치면 `judge()` 가 아예 `None` 을 준다(4.5절).
 
 #### 판정하지 않는 행
 
@@ -369,23 +381,23 @@ key   = b'1000'            헤더 = [('mode', b'chg')]
   "event_id":    "018f3a2c-6b41-7c9e-a5d2-3f8e1b0c7d94",
   "serial_number": 1003, "mode": "chg",
   "measured_at": "2020-08-07T16:25:38+09:00", "seq": 2007,
-  "state": "anomaly", "module": 8, "cell": 1,
-  "fault_type": "용량불량", "warmup": false,
-  "detail": "용량불량 M08 CV01",
-  "model": { "name": "battery-anomaly-b_option", "version": "20260825_165511" } }
+  "state": "anomaly", "module": 9, "cell": 3,
+  "fault_type": "셀 단위 이상", "warmup": false,
+  "detail": "셀 단위 이상 M09CV03",
+  "model": { "name": "battery-anomaly-ae", "version": "7.505-0.809-2.169" } }
 ```
 
 ```json
-{ "…": "정상일 때는 지목이 비어 있다. warmup 이면 온도는 아직 안 본 것이다",
+{ "…": "정상일 때는 지목이 비어 있다. warmup 이면 판정이 아직 확정 전이다",
   "state": "normal", "module": null, "cell": null,
-  "fault_type": "", "warmup": true, "detail": "이상 없음(온도 판정 준비 중)" }
+  "fault_type": "", "warmup": true, "detail": "이상 없음(판정 확정 전)" }
 ```
 
 > **`warmup: true` 를 그냥 '정상' 으로 칠하면 안 된다.**
-> 충전 세션 시작 후 60 판정행(=300초)은 모델이 온도 오프셋을 추정하는 구간이라
-> **온도 판정(T2/T3/T5)이 보류**다. 그 구간의 `normal` 은 "전압 기준으로는 정상" 이라는
-> 뜻이지 온도까지 봤다는 뜻이 아니다. 화면에는 "판정 준비 중" 으로 정직하게 드러낸다.
-> api 를 재시작하면 팩별 상태가 날아가므로 이 구간이 다시 생긴다.
+> SOC 16칸이 8칸을 넘기 전까지는 근거가 모자라 **판정이 뒤집힐 수 있다.** 실제로
+> DEMO08(센서불량)은 세션 초반에 `용접불량 M02` 로 나왔다가 확정 시점에
+> `센서불량 M14` 로 바뀐다. 화면에는 "판정 확정 전" 으로 정직하게 드러낸다.
+> api 를 재시작하면 팩별 누적 버퍼가 날아가므로 이 구간이 다시 생긴다.
 
 > **`module` / `cell` 은 1부터다** — 사람이 읽는 M03 / CV07 번호다.
 > 배열 인덱스(0부터)와 1 차이가 나므로, 화면에서 타일을 짚을 때 `verdict["module"] - 1` 을 쓴다.
@@ -458,42 +470,47 @@ Kafka 는 **그룹 단위로 오프셋을 관리**한다. 그룹이 다르면 �
 
 ## 7. 판정 로직 — 이상탐지 모델
 
-`detector.py` / 모델 `battery-anomaly-b_option` v`20260825_165511`
+`detector.py` / 모델 `battery-anomaly-ae`
 
 ### 무엇이 어디에 있는가
 
 | | |
 |---|---|
-| `models/battery_model_*.bundle` (3.3 MB) | 모델 아티팩트 1개 — PCA 10성분 + IsolationForest, SOC 기준표, 임계값, manifest |
-| `battery_detector.py` (저장소 루트) | 모델팀 인수인계본. 설정·전처리·검출기 파사드. **Kafka·FastAPI 를 전혀 모른다** |
-| `src/step*.py` | 학습 코드 그대로. 번들에 **복제하지 않고 import 한다** |
-| `src/battery_pack_defect_detection/detector.py` | 이 저장소의 접착부. 측정 메시지 ↔ 모델 사이의 번역만 한다 |
-| `src/README.md` | 모델팀이 쓴 인수인계 문서. 함정과 운영 지표가 여기 있다 |
+| `models/battery_anomaly.pkl` | 모델 아티팩트 1개 — AE 2개(MLPRegressor) + 스트림별 임계값 + 보정 점수 |
+| `battery_anomaly.py` (저장소 루트) | 모델팀 인수인계본. 곡선 생성·검출기·임계 보정. **Kafka·FastAPI 를 전혀 모른다** |
+| `pack_loader.py` (저장소 루트) | 측정 → `PackData`. **학습(CSV)과 추론(Kafka 행)이 같은 전처리를 거치게 한다** |
+| `train_anomaly.py` (저장소 루트) | 정상 50팩 학습 + 데모 9팩 검증 |
+| `src/battery_pack_defect_detection/detector.py` | 이 저장소의 접착부. 측정 누적 + 재판정 + 메시지 번역 |
+| `old/` | 2026-08-27 이전의 행 단위 모델 일체. 어디에서도 import 하지 않는다 |
 
-`src/` 를 번들에 넣지 않은 이유는 넣으면 학습 코드와 배포 코드가 갈라지기 때문이다.
-번들 `manifest` 에 학습 시점의 `step*.py` 해시가 들어 있고, **기동할 때 실제 `src/` 와
-대조해서 어긋나면 서버가 뜨지 않는다**(`BD_VERIFY_HASH=1`). 끄지 말 것.
+### 한 팩이 판정되기까지
 
-### 한 행이 판정되기까지
+**행 하나만 보고는 아무 말도 할 수 없다.** 모델은 충전 세션 전체의 곡선을 본다.
 
 ```
-측정 1건 (176셀 · 32온도 · SOC · 전류)
+측정 1건 (176셀 · 32온도 · SOC)
   │
-  ├ 통전 판정      |I| > 1.0 A 인가            아니면 → 판정 안 함
-  ├ 과도구간 제외  전류 급변 직후 5행인가       맞으면 → 판정 안 함
-  ├ 솎아내기       5초 격자에 맞는 행인가       (지금은 이미 5초라 전부 통과)
+  ├ 방전인가                                  맞으면 → 판정 안 함
+  ├ 역순으로 온 행인가                          맞으면 → 판정 안 함
   ▼
-계층 분해 (셀 → 모듈 → 팩)  →  피처 9종 784열  →  SOC 기준표로 robust z
+팩별 누적 버퍼에 쌓는다   (세션 공백 300초를 넘으면 비우고 다시 시작)
+  │
+  ├ 재판정 차례인가 (30행 = 2.5분마다)          아니면 → 판정 안 함
+  ├ 100행 이상 · SOC 칸 4/16 이상인가           아니면 → 판정 안 함
   ▼
-점수 (룰 기반 연속 점수)  vs  임계 11.47
+누적분 전체로 PackData 재구성 → SOC 16칸으로 접는다
   ▼
-지속 조건: 초과가 2 판정행(10초) 이어지면  →  알람
+  ├ 셀 단위 이상 : 로버스트 z (팩 내부 비교)      임계 7.505
+  ├ 용접불량     : AE 재구성 오차 (모듈 편차)     임계 0.809
+  └ 센서불량     : AE 재구성 오차 (온도)         임계 2.169
   ▼
-알람일 때만:  SPE 기여도 분해 → 원인 열      (예: V9:M08CV01)
-              유형 분류        → 불량 유형    (예: 용량불량(M08CV01, conf 0.82))
+걸린 스트림 중 임계 대비 가장 큰 곳을 지목      (예: M09CV03)
+  ▼
+SOC 칸 8/16 미만이면 warning(미확정), 넘었으면 anomaly
 ```
 
-판정 1행에 약 **5.6 ms**. 예산(5초)의 900분의 1이라 컨슈머 콜백에서 그대로 돌린다.
+재판정 1회에 약 **7 ms**(최대 12 ms). 예산(5초)의 700분의 1이라 컨슈머 콜백에서
+그대로 돌린다. 816행짜리 팩 하나에 판정 22건이 나온다.
 
 ### 바깥과의 계약
 
@@ -509,31 +526,36 @@ verdict = {"state": "normal|warning|anomaly",
 - `state` 는 셋 중 하나여야 한다. `judge()` 가 검사해서 아니면 즉시 예외를 던진다 —
   모델 교체 시 가장 흔한 사고가 라벨 불일치라서다.
 - **`None` 은 정상이 아니라 "판정 안 함" 이다.** 4.5절 "판정하지 않는 행" 참고.
-- `history` 는 받지만 쓰지 않는다. 모델이 자기 상태(V2 링버퍼 61행, T1 온도 오프셋,
-  지속 카운터)를 직접 들고 있어서 앞선 측정을 다시 받을 필요가 없다.
+- `history` 는 받지만 쓰지 않는다. `detector.py` 가 팩별 누적 버퍼를 직접 들고
+  있어서 앞선 측정을 다시 받을 필요가 없다.
   인터페이스는 부르는 쪽을 고치지 않으려고 그대로 뒀다.
 
-### 상태가 있는 모델이라는 것의 의미
+### 상태가 있다는 것의 의미
 
-모델은 **팩마다 상태를 들고 있다**(팩당 약 90 KB). 여기서 따라오는 제약이 셋이다.
+모델 자체는 상태가 없다. 대신 **`detector.py` 가 팩마다 측정을 쌓아 둔다.**
+여기서 따라오는 제약이 셋이다.
 
 1. **같은 팩의 연속 행이 같은 프로세스에 순서대로** 들어가야 한다.
    측정 토픽의 키가 `serial_number` 라 파티션 안에서 순서가 보장되고,
    컨슈머 스레드가 하나라 순서대로 들어간다. `uvicorn --workers 1` 을 유지할 것.
    확장은 워커 수가 아니라 **파티션 수**로 한다(파티션 N개 = 인스턴스 N개, 같은 `group_id`).
-2. **재시작하면 상태가 날아간다.** 재기동 후 300초는 온도 판정이 다시 보류된다
-   (`warmup: true`). 배포할 때마다 이 공백이 생긴다.
-3. **충전 세션이 끝나면 알아서 비워진다**(비통전 60행). 되감은 재생처럼 강제로
-   끊어야 하면 `POST /packs/{serial_number}/reset`.
+2. **재시작하면 누적이 날아간다.** 재기동 후에는 그 팩의 SOC 칸을 처음부터 다시
+   채워야 하고, 100행·4칸을 넘을 때까지 판정이 없다. 배포할 때마다 이 공백이 생긴다.
+3. **충전 세션이 끝나면 알아서 비워진다**(`measured_at` 공백 300초). 되감은
+   재생처럼 강제로 끊어야 하면 `POST /packs/{serial_number}/reset`.
 
-### 운영 지표 (모델팀 실측, `src/README.md`)
+### 운영 지표 (2026-08-27 실측, 정상 50팩 보정 / 데모 9팩 검증)
 
 | | |
 |---|---|
-| 오탐률 | **0.210 건 / 시간 / 팩** (30팩 중 2팩에 몰려서 발생). 100팩이면 시간당 21건 |
-| 검출률 | -20 mV / 25초 결함 기준 **0.61** (SOC 구간에 따라 2~6배 갈린다) |
-| 상시 감시할 지표 | `\|z\| > 6` 비율. 현재 정상 기준 **0.018%**. 서서히 오르면 SOC 기준표 재학습 시점 |
-| 적용 범위 | 충전 구간, SOC 26~89%. 방전은 `dchg` 모드로 별도 학습이 필요하다 |
+| 오탐률 | 스트림당 2% (팩 1/50) — 운영점이 그렇다(`FP_RANK=1`). **세 스트림을 OR 로 묶은 통합 오탐은 6%**(팩 3/50)다. 이쪽이 실제 수치다 |
+| 검출률 | 데모 9팩 **9/9**. 용접 8·12 mV, 센싱와이어 8 mV, 용량 25 mV, 센서 2.5 °C·고착 |
+| 검출 한계 | 용접 2 mV 는 안 걸린다(DEMO09). 정상 팩의 자체 모듈 편차 폭(2.7~2.8 mV)과 구분되지 않는다 |
+| 임계 | 셀 7.505 / 용접 0.809 / 센서 2.169 |
+| 적용 범위 | 충전 구간, SOC 37.1~88.8%(모델의 격자 구간). 방전은 별도 학습이 필요하다 |
+
+> 통합 오탐률의 신뢰구간은 표본 50팩 기준으로 넓다. 정상 팩이 늘어나면
+> `train_anomaly.py` 로 재보정할 것.
 
 ---
 
@@ -667,33 +689,32 @@ docker compose exec dev pytest
 
 ### 모델 쪽 함정 — 어겨도 예외가 안 나고 조용히 틀린다
 
-8. **`BD_SOURCE_HZ` 는 `0.2` 다. `1.0` 이 아니다.** 가장 틀리기 쉬운 값이다.
-   원본 CSV 가 1초/행인 것을 보고 `1.0` 을 넣기 쉬운데, 토픽에 흐르는 것은
-   `database.py` 가 5초 구간마다 첫 행만 남긴 **5초/행**이다. `1.0` 을 넣으면 모델이
-   한 번 더 솎아 25초/행이 된다 — **예외는 나지 않고 점수 분포도 거의 그대로다.**
-   대신 시간 창이 전부 5배로 늘어난다(지속 조건 10→50초, warmup 300→1500초,
-   V2 기울기 창 300→1500초). 감도와 오탐률만 조용히 달라진다.
-   기동 후 **`/stats` 의 `model.stride` 가 `1`** 인지 확인하는 것으로 잡을 수 있다.
-9. **`scikit-learn` 은 `==1.9.0` 으로 고정한다.** 번들 안에 sklearn 의 PCA /
-   IsolationForest 객체가 pickle 로 그대로 들어 있어서, 버전이 다르면 로드가 깨지거나
+8. **`judged` 가 `received` 보다 훨씬 작은 것은 정상이다.** 팩 단위 모델이라
+   30행마다 한 번만 판정한다(`detector.REPREDICT_EVERY_ROWS`). 816행짜리 팩
+   하나에 판정 22건이다. 예전 행 단위 모델처럼 1:1 로 나오지 않는다.
+9. **`scikit-learn` 은 `==1.9.0` 으로 고정한다.** `battery_anomaly.pkl` 안에 sklearn 의
+   MLPRegressor 객체가 pickle 로 그대로 들어 있어서, 버전이 다르면 로드가 깨지거나
    조용히 다르게 동작한다. `pyproject.toml` 의 `>=` 로 되돌리지 말 것.
-10. **`uvicorn --workers 1` 을 유지한다.** 모델이 팩마다 상태를 들고 있어서 워커가
-    여럿이면 같은 팩의 행이 여러 프로세스로 흩어져 상태가 조각난다. 7절 참고.
-11. **`BD_VERIFY_HASH=0` 으로 끄지 않는다.** 모델과 `src/step*.py` 가 어긋나면
-    피처 순서·격자·상수가 조용히 달라진다. 기동을 거부하는 편이 낫다.
+10. **`uvicorn --workers 1` 을 유지한다.** `detector.py` 가 팩마다 측정을 쌓아 둬서
+    워커가 여럿이면 같은 팩의 행이 여러 프로세스로 흩어져 곡선이 조각난다. 7절 참고.
+11. **`database.py` 의 통전 필터를 빼면 안 된다.** 예전 모델은 비통전 행이 섞여
+    들어와도 `StreamGate` 가 스스로 걸러냈지만, **새 모델에는 그 방어가 없다.**
+    정지 행이 곡선에 섞이면 SOC 칸 평균이 오염되고 **예외는 나지 않는다.**
+    학습도 같은 상수를 쓴다(`pack_loader` 가 `database.CURRENT_ON_AMPS` 를 import).
 12. **`judge()` 가 `None` 을 주면 아무것도 발행하지 않는다.** '정상' 으로 바꿔 발행하면
     화면이 "아직 판정 전" 과 "정상" 을 구분할 수 없다. 4.5절 참고.
-13. **팩 상태를 강제로 비울 때는 두 겹을 다 비워야 한다** — 검출기(링버퍼·오프셋·
-    카운터)와 전처리(중복 판별 키). `detector.reset_pack()` 이 그렇게 한다.
-    검출기만 비우면 되감은 재생이 통째로 '중복' 으로 버려지고 예외는 나지 않는다.
+13. **`warmup: true` 인 판정은 뒤집힐 수 있다.** SOC 칸이 8/16 을 넘기 전까지는
+    근거가 모자란다. 그 구간의 지목을 확정된 것처럼 다루면 정비 대상이 엉뚱해진다.
 14. **통전 필터와 세션 경계는 한 쌍이다.** `database.py` 가 정지 행을 발행하지 않게 되면서
-    모델이 "정지가 이어진다 → 충전 세션이 끝났다" 를 알아채던 길이 막혔다
-    (`StreamGate.idle_reset_rows`). 그 자리를 `detector.SESSION_GAP_SECONDS` 가 대신한다 —
-    `measured_at` 공백이 300초를 넘으면 세션을 끊는다.
+    "정지가 이어진다 → 충전 세션이 끝났다" 를 알아채던 길이 막혔다.
+    그 자리를 `detector.SESSION_GAP_SECONDS` 가 대신한다 —
+    `measured_at` 공백이 300초를 넘으면 누적 버퍼를 비운다.
     **`CURRENT_ON_AMPS` 필터를 켜고 이 처리를 빼면** 같은 팩의 다음 충전이 앞 세션에
-    이어 붙는다. V2 기울기가 공백을 가로질러 계산되고, T1 온도 오프셋은 지난 세션 값을
-    그대로 쓰고, warmup 이 다시 돌지 않는다. **예외는 나지 않는다.**
-    (`tests/test_detector.py::test_session_gap_restarts_warmup` 가 이것을 잡는다)
+    이어 붙어 SOC 축이 두 번 왕복한다. **예외는 나지 않는다.**
+    (`tests/test_detector.py::test_session_gap_starts_a_new_pack` 가 이것을 잡는다)
+15. **모델을 다시 학습하면 임계가 바뀐다.** `models/battery_anomaly.pkl` 을 갈아
+    끼우면 `/stats` 의 `model.version`(임계 세 개를 이어 붙인 문자열)이 달라진다.
+    과거 판정과 비교할 때 이 값을 먼저 확인할 것.
 
 ---
 
@@ -703,13 +724,16 @@ docker compose exec dev pytest
 |---|---|
 | 발행 속도 | `sensor_generator.SEND_INTERVAL_SECONDS` 또는 실행 시 `--interval` |
 | 화면 갱신 주기 | `app.REFRESH_EVERY` (발행 주기와 맞추는 것을 권장) |
-| 판정 임계값 | 번들 안에 들어 있다. `BD_SCORE_KEY` 로 `rule`(11.47) / `score`(33.72) 를 고르면 짝이 맞춰 따라온다 |
-| **모델 교체** | 새 번들을 `models/` 에 두고 `docker-compose.yml` 의 `BD_ARTIFACT_BUNDLE` 을 바꾼다. `src/step*.py` 도 같이 받아야 해시 검증을 통과한다 |
-| 모델 입력 주기 | `detector.MEASUREMENT_SECONDS` + `docker-compose.yml` 의 `BD_SOURCE_HZ`. **`database.RESAMPLE_SECONDS` 와 반드시 같이 바꾼다** (`tests/test_detector.py` 가 어긋나면 실패한다) |
+| 판정 임계값 | pkl 안에 들어 있다. 직접 고치지 말고 `battery_anomaly.FP_RANK`(오탐 운영점)를 바꿔 `train_anomaly.py` 를 다시 돌린다 |
+| 재판정 주기 | `detector.REPREDICT_EVERY_ROWS` (30행 = 2.5분) |
+| 판정 시작 조건 | `detector.MIN_ROWS` / `MIN_COVERAGE` / `STABLE_COVERAGE` |
+| **모델 교체** | 새 pkl 을 `models/` 에 두고 `docker-compose.yml` 의 `BD_ANOMALY_MODEL` 을 바꾼다 |
+| 모델 입력 주기 | `detector.MEASUREMENT_SECONDS`. **`database.RESAMPLE_SECONDS` 와 반드시 같이 바꾼다** (`tests/test_detector.py` 가 어긋나면 실패한다) |
+| 데모 팩 | `database.DEMO_SERIALS` / `DEMO_PACKS`. 재생은 `sensor_generator.py`(기본), 원본은 `--original` |
 | 차트 창 선택지 | `app.WINDOW_CHOICES` (값은 건수, × 5초가 실제 시간) |
 | 버퍼 보관량 | `consumer.PER_SECTION`(측정) / `consumer.ALERT_LIMIT`(알림) |
 | 제외 구간 | `database.EXCLUDE_CHG` / `EXCLUDE_DCHG` — 재적재 불필요 |
-| 통전 기준(정지 행 제외) | `database.CURRENT_ON_AMPS`. **모델의 `current_on` 과 같은 값이어야 한다.** 끄려면 `_where()` 의 `abs(current) >` 절을 빼면 되고, 그래도 모델이 같은 판단을 하므로 판정 결과는 안 바뀐다(발행량만 는다) |
+| 통전 기준(정지 행 제외) | `database.CURRENT_ON_AMPS`. **학습도 이 상수를 그대로 쓴다**(`pack_loader`). 끄면 판정이 달라진다 — 새 모델에는 자체 통전 게이트가 없다 |
 | 세션 경계 기준 | `detector.SESSION_GAP_SECONDS` — `load()` 가 모델의 `idle_reset_rows × 5초` 로 채운다. 손으로 고치지 말고 모델 설정을 고칠 것 |
 | 색·타이포 | `app.PALETTE` / `app.TONES` |
 
@@ -723,8 +747,8 @@ docker compose exec dev pytest
   "판정 준비 중" 배지가 필요하다.
 - **화면이 `fault_type` 을 표시하도록** — 판정 카드의 `detail` 에는 이미 들어가 있지만,
   유형별 집계나 필터가 필요해지면 별도 필드로 쓰는 편이 낫다.
-- **재시작 시 warmup 공백 없애기** — 팩당 약 90 KB 라 100팩이면 9 MB 다. Redis 체크포인트로
-  없앨 수 있지만 처음부터 필요하진 않다. 배포 빈도가 문제가 될 때 도입한다(`src/README.md` 권고).
+- **재시작 시 누적 공백 없애기** — 누적 버퍼를 Redis 에 체크포인트하면 없앨 수 있지만
+  처음부터 필요하진 않다. 배포 빈도가 문제가 될 때 도입한다.
 - **방전 구간 판정** — 지금은 판정하지 않는다. `dchg` 모드로 별도 학습이 필요하다.
 - `label` 필드가 아직 `None` 이다. 정답 라벨 확보 / 규칙 파생은 다음 단계의 주제.
 - 보류 중인 **결측 의심 구간 34개** — 다시 빼기로 하면 `database.py` 의 두 집합에 되돌려 넣으면 된다
@@ -737,6 +761,6 @@ docker compose exec dev pytest
 - [`docs/kafka-message-spec.md`](kafka-message-spec.md) — 메시지 필드 전체 명세, 값 규약, 변경 이력
 - [`kafkadata.json`](../kafkadata.json) — 측정 메시지 JSON Schema
 - [`verdictdata.json`](../verdictdata.json) — 판정 메시지 JSON Schema
-- [`src/README.md`](../src/README.md) — **모델팀 인수인계 문서.** 함정 3가지, 운영 지표, 적용 범위
-- [`src/.env.example`](../src/.env.example) — 모델이 읽는 환경변수 (`BD_*`) 설명
+- [`docs/ae_model.md`](ae_model.md) · [`diagnostics.md`](diagnostics.md) · [`joint_anomaly.md`](joint_anomaly.md) — 모델 설계 근거 실험 기록
+- [`old/README.md`](../old/README.md) — 2026-08-27 이전의 행 단위 모델
 - [`README.md`](../README.md) — 개발 환경 구성
