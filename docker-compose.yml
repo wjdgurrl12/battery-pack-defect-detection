@@ -9,9 +9,14 @@
 # 반면 의존성(uv add)만 바뀐 경우는 이미지를 다시 굽지 않아도 된다. 아래 서비스들이
 # 뜰 때마다 `uv sync --locked` 로 자기 /opt/venv 를 uv.lock 에 맞추기 때문이다.
 # uv.lock 은 git 으로 전파되므로, 받는 쪽은 git pull 후 up -d 만 하면 된다.
+# Dockerfile 이 이미지 넷을 담게 되면서 target 을 명시한다. 이 파일은 개발용이라
+# 늘 dev 를 굽는다. 배포용(runtime, postgres-demo)은 docker-compose.prod.yml 이
+# 가져간다 - 그쪽은 코드를 이미지에 굽고 마운트를 쓰지 않는다.
 x-app: &app
-  image: 4dcookie/vibration-monitoring-dev:0.1.0
-  build: .
+  image: 4dcookie/vibration-monitoring-dev:0.1.1
+  build:
+    context: .
+    target: dev
   pull_policy: missing
   volumes:
     - .:/workspace

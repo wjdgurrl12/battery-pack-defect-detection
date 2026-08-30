@@ -24,7 +24,6 @@ pack_measurement 에는 원본 CSV 가 손대지 않은 상태로 들어 있다(
 """
 from collections.abc import Generator
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, sessionmaker
 import pandas as pd
 import os
 
@@ -37,23 +36,10 @@ if DATABASE_URL.startswith("postgresql://"):
 
 engine = create_engine(DATABASE_URL)
 
-SessionLocal = sessionmaker(
-    bind=engine,
-    autoflush=False,
-    expire_on_commit=False,
-)
-
-def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-def check_db_connection() -> int:
-    with engine.connect() as conn:
-        result = conn.scalar(text("select 1"))
-    return int(result)
+# 2026-08-30 정리: SessionLocal / get_db / check_db_connection 을 지웠다.
+# FastAPI 에 ORM 을 붙이려던 초기 골격인데, 이 파일의 실제 소비자(generator 의
+# 발행 루프, 분석용 load_measurements)는 전부 engine 을 직접 쓴다. 어디서도
+# import 되지 않는 것을 확인하고 걷어냈다 - 되살릴 일이 있으면 git 이력에 있다.
 
 # 시간축이 뭉개진 파일. 고유 타임스탬프가 35개뿐이라 시계열로 쓸 수 없다.
 EXCLUDED_FILES = frozenset({"1043_dchg.csv"})
@@ -91,11 +77,11 @@ EXCLUDE_DCHG = frozenset(range(1000, 1051))
 #
 # 원본 50팩은 전부 정상이라 그대로 재생하면 이상 판정이 한 번도 안 나온다.
 # 그래서 원본 1000_chg 의 타임라인에 실제 팩의 편차 패턴을 이식하고 그 위에
-# 고장을 주입한 팩 9개를 따로 만들었다. 정상 2, 용접불량 2, 셀 단위 이상 2,
+# 고장을 주입한 팩 9개를 따로 만들었다. 정상 2, 용접불량 2, 센싱와이어불량 2,
 # 센서불량 2, 검출한계 미만 1 - 무엇을 심었는지 아는 데이터라 화면의 판정을
-# 정답과 대조할 수 있다. sensor_generator 의 --anomaly-every 와 다른 점은,
-# 저쪽이 발행 직전에 값을 흔드는 것이고 이쪽은 데이터 자체가 고장 팩이라는
-# 것이다(상관 구조가 살아 있어 모델이 실제로 판정할 수 있다).
+# 정답과 대조할 수 있다. 발행 직전에 값을 흔들던 예전 주입 도구와 다른
+# 점은 데이터 자체가 고장 팩이라는 것이다 - 상관 구조가 살아 있어 모델이
+# 실제로 판정할 수 있고, 그래서 그 도구들은 2026-08-30 에 걷어냈다(old/).
 #
 # serial 을 9001~9009 로 잡아 원본(1000~1050)과 겹치지 않게 했다. 덕분에
 # pack_measurement 에 같이 들어 있어도 serial 만 보고 갈라낼 수 있고,
@@ -131,9 +117,9 @@ DEMO_PACKS = {
     9004: dict(pack_id="DEMO04", donor=1028, fault="weld",
                location="M12",     magnitude="12.0 mV", expect="용접불량"),
     9005: dict(pack_id="DEMO05", donor=1046, fault="wire",
-               location="M05CV06", magnitude="8.0 mV",  expect="셀 단위 이상"),
+               location="M05CV06", magnitude="8.0 mV",  expect="센싱와이어불량"),
     9006: dict(pack_id="DEMO06", donor=1029, fault="capacity",
-               location="M09CV03", magnitude="25.0 mV", expect="셀 단위 이상"),
+               location="M09CV03", magnitude="25.0 mV", expect="센싱와이어불량"),
     9007: dict(pack_id="DEMO07", donor=1020, fault="sensor_offset",
                location="M01T02",  magnitude="2.5 °C",  expect="센서불량"),
     9008: dict(pack_id="DEMO08", donor=1003, fault="sensor_stuck",

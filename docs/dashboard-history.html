@@ -1,0 +1,1751 @@
+<title>배터리팩 대시보드 변천사</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+
+<style>
+/* ------------------------------------------------------------------
+   페이지 토큰 - 세 상태(light / 무표시 / dark) 전부를 토큰으로 다룬다
+   ------------------------------------------------------------------ */
+:root{
+  --ground:#eceef1; --panel:#ffffff; --panel-2:#f5f6f8;
+  --ink:#161a1f; --muted:#5b6672; --faint:#8a949f;
+  --line:#d7dbe1; --line-soft:#e6e9ee;
+  --accent:#8f5c11; --accent-ink:#8f5c11; --accent-soft:#f2e6d2;
+  --shadow:0 1px 2px rgba(20,26,33,.06), 0 12px 32px -18px rgba(20,26,33,.35);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0f1216; --panel:#161a1f; --panel-2:#1b2027;
+    --ink:#e4e8ed; --muted:#9aa4af; --faint:#6f7986;
+    --line:#262d35; --line-soft:#1f252c;
+    --accent:#d8a052; --accent-ink:#e9bd7e; --accent-soft:#2a2216;
+    --shadow:0 1px 2px rgba(0,0,0,.5), 0 18px 40px -22px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0f1216; --panel:#161a1f; --panel-2:#1b2027;
+  --ink:#e4e8ed; --muted:#9aa4af; --faint:#6f7986;
+  --line:#262d35; --line-soft:#1f252c;
+  --accent:#d8a052; --accent-ink:#e9bd7e; --accent-soft:#2a2216;
+  --shadow:0 1px 2px rgba(0,0,0,.5), 0 18px 40px -22px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:'Noto Sans KR','IBM Plex Sans KR',system-ui,sans-serif;
+  font-size:16px; line-height:1.75; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px; margin:0 auto; padding:0 24px 120px}
+.prose{max-width:66ch}
+
+h1,h2,h3{font-family:'IBM Plex Sans KR','Noto Sans KR',sans-serif; text-wrap:balance; margin:0}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace; font-variant-numeric:tabular-nums}
+
+/* ---- 표지 ---- */
+.cover{padding:88px 0 40px; border-bottom:1px solid var(--line)}
+.eyebrow{
+  font-family:'IBM Plex Mono',monospace; font-size:.74rem; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--accent-ink); margin-bottom:18px;
+}
+.cover h1{font-size:clamp(2rem,4.4vw,3.05rem); font-weight:700; line-height:1.24; letter-spacing:-.02em}
+.cover p{color:var(--muted); font-size:1.05rem; margin:20px 0 0}
+.facts{
+  display:flex; flex-wrap:wrap; gap:0; margin-top:34px;
+  border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--panel);
+}
+.fact{flex:1 1 150px; padding:14px 18px; border-right:1px solid var(--line-soft)}
+.fact:last-child{border-right:none}
+.fact .k{font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+  font-family:'IBM Plex Mono',monospace}
+.fact .v{font-size:1.35rem; font-weight:700; font-family:'IBM Plex Sans KR',sans-serif;
+  font-variant-numeric:tabular-nums; line-height:1.4}
+.fact .v small{font-size:.8rem; font-weight:400; color:var(--muted)}
+
+.disclaimer{
+  margin:34px 0 0; padding:14px 18px; border-left:3px solid var(--accent);
+  background:var(--accent-soft); border-radius:0 8px 8px 0;
+  font-size:.9rem; color:var(--ink);
+}
+
+/* ---- 전체 커밋 타임라인 ---- */
+.tlwrap{overflow-x:auto; margin-top:26px; border:1px solid var(--line); border-radius:12px; background:var(--panel)}
+table.tl{border-collapse:collapse; width:100%; min-width:820px; font-size:.85rem}
+table.tl th,table.tl td{padding:10px 14px; border-bottom:1px solid var(--line-soft); text-align:left; vertical-align:top}
+table.tl thead th{background:var(--panel-2); font-family:'IBM Plex Mono',monospace; font-weight:500;
+  font-size:.72rem; letter-spacing:.06em; color:var(--muted)}
+table.tl td.sha{font-family:'IBM Plex Mono',monospace; color:var(--accent-ink); white-space:nowrap}
+table.tl td.date{font-family:'IBM Plex Mono',monospace; color:var(--faint); white-space:nowrap}
+table.tl td.msg{color:var(--muted)}
+table.tl tr.hit td.msg{color:var(--ink)}
+table.tl tr:last-child td{border-bottom:none}
+.mark{font-family:'IBM Plex Mono',monospace; font-size:.72rem; letter-spacing:.04em; white-space:nowrap;
+  padding:2px 9px; border-radius:99px; border:1px solid var(--line)}
+.mark.on{background:var(--accent-soft); border-color:var(--accent); color:var(--accent-ink); font-weight:600}
+.mark.off{color:var(--faint)}
+
+/* ---- 단계 ---- */
+.stage{padding:64px 0 8px; border-bottom:1px solid var(--line-soft)}
+.stage:last-of-type{border-bottom:none}
+.stage-head{display:flex; gap:22px; align-items:flex-start}
+.num{
+  flex:none; width:56px; font-family:'IBM Plex Mono',monospace; font-weight:500;
+  font-size:1.6rem; color:var(--accent-ink); line-height:1.1; padding-top:6px;
+  border-top:2px solid var(--accent);
+}
+.stage h2{font-size:1.6rem; font-weight:700; letter-spacing:-.01em; line-height:1.35}
+.stage .meta{
+  font-family:'IBM Plex Mono',monospace; font-size:.76rem; color:var(--faint);
+  margin:8px 0 0; display:flex; flex-wrap:wrap; gap:6px 14px;
+}
+.stage .meta .sha{color:var(--accent-ink)}
+.stage .lede{color:var(--muted); margin:18px 0 0; font-size:1rem; max-width:66ch}
+.stage-body{padding-left:78px}
+@media (max-width:720px){
+  .stage-head{flex-direction:column; gap:10px}
+  .num{width:auto; padding:6px 0 0}
+  .stage-body{padding-left:0}
+}
+
+/* ---- 화면 액자 ---- */
+figure{margin:30px 0 0}
+.frame{
+  border:1px solid var(--line); border-radius:12px; overflow:hidden;
+  background:var(--panel); box-shadow:var(--shadow);
+}
+.chrome{
+  display:flex; align-items:center; gap:8px; padding:9px 13px;
+  background:var(--panel-2); border-bottom:1px solid var(--line);
+}
+.dot{width:9px; height:9px; border-radius:50%; background:var(--line); flex:none}
+.chrome .url{
+  font-family:'IBM Plex Mono',monospace; font-size:.71rem; color:var(--faint);
+  margin-left:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.scroller{overflow-x:auto}
+figcaption{
+  margin-top:10px; font-size:.8rem; color:var(--faint);
+  font-family:'IBM Plex Mono',monospace;
+}
+
+/* ---- 상태별 컷 갤러리 ---- */
+.gal-head{margin:42px 0 0; display:flex; align-items:baseline; gap:12px; flex-wrap:wrap}
+.gal-head h3{font-size:1.08rem; font-weight:700}
+.gal-head span{font-family:'IBM Plex Mono',monospace; font-size:.74rem; color:var(--faint)}
+.gal-note{color:var(--muted); font-size:.92rem; margin:8px 0 0; max-width:66ch}
+.gallery{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin-top:20px}
+.gallery.wide{grid-template-columns:repeat(auto-fit,minmax(400px,1fr))}
+.shot{border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--panel);
+  display:flex; flex-direction:column}
+.shot .lbl{
+  padding:8px 12px; border-bottom:1px solid var(--line-soft); font-size:.73rem;
+  font-family:'IBM Plex Mono',monospace; color:var(--faint);
+  display:flex; justify-content:space-between; gap:10px; align-items:baseline;
+}
+.shot .lbl b{color:var(--ink); font-weight:600; font-family:'IBM Plex Sans KR',sans-serif; font-size:.86rem}
+.shot .body{padding:13px; background:var(--panel-2); flex:1; display:flex; align-items:center}
+.shot .body > *{width:100%}
+.shot .note{padding:10px 12px; font-size:.79rem; color:var(--muted); border-top:1px solid var(--line-soft); line-height:1.6}
+.app.fit{min-width:0; background:transparent}
+
+/* ---- 변경점 목록 ---- */
+.changes{list-style:none; padding:0; margin:26px 0 0; display:grid; gap:0}
+.changes li{
+  display:grid; grid-template-columns:104px 1fr; gap:16px; align-items:baseline;
+  padding:12px 0; border-top:1px solid var(--line-soft); font-size:.94rem;
+}
+.changes .tag{
+  font-family:'IBM Plex Mono',monospace; font-size:.7rem; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--faint); padding-top:3px;
+}
+.changes .why{display:block; color:var(--muted); font-size:.86rem; margin-top:3px}
+@media (max-width:560px){ .changes li{grid-template-columns:1fr; gap:2px} }
+
+/* ---- 말 바뀜 표 ---- */
+.wordtable{width:100%; border-collapse:collapse; margin-top:22px; font-size:.9rem}
+.wordtable th,.wordtable td{padding:10px 14px; text-align:left; border-bottom:1px solid var(--line-soft)}
+.wordtable th{font-size:.72rem; letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+  font-family:'IBM Plex Mono',monospace; font-weight:500}
+.wordtable td.before{color:var(--faint)}
+.wordtable td.after{font-weight:600}
+
+/* ---- 요약 표 ---- */
+.summary{margin-top:76px}
+.summary h2{font-size:1.5rem; font-weight:700}
+.grid-wrap{overflow-x:auto; margin-top:26px; border:1px solid var(--line); border-radius:12px; background:var(--panel)}
+table.matrix{border-collapse:collapse; width:100%; min-width:900px; font-size:.86rem}
+table.matrix th,table.matrix td{padding:12px 14px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+table.matrix thead th{
+  background:var(--panel-2); font-family:'IBM Plex Mono',monospace;
+  font-size:.72rem; letter-spacing:.06em; color:var(--muted); font-weight:500; text-align:left;
+}
+table.matrix tbody th{
+  text-align:left; font-weight:600; color:var(--ink); white-space:nowrap;
+  border-right:1px solid var(--line-soft); font-family:'IBM Plex Sans KR',sans-serif;
+}
+table.matrix td{color:var(--muted)}
+table.matrix td.new{color:var(--ink); font-weight:500}
+table.matrix tr:last-child th,table.matrix tr:last-child td{border-bottom:none}
+
+.closing{margin-top:56px; padding-top:26px; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; max-width:66ch}
+
+/* ==================================================================
+   재현 화면 - 실제 앱의 팔레트를 그대로 쓴다(밝은 화면 전용 UI라
+   페이지 테마와 무관하게 항상 같은 색으로 그린다)
+   ================================================================== */
+.app{
+  --a-bg:#f7f7f7; --a-card:#ffffff; --a-line:#e1e1e1; --a-strong:#c6c6c6;
+  --a-ink:#262626; --a-slate:#4c4c4c; --a-muted:#5d5d5d; --a-faint:#a3a3a3;
+  --a-action:#2a72e5; --a-select:#0957c8;
+  --a-alert:#da3944; --a-alert-soft:#ffd8d7;
+  --a-ok:#058765; --a-ok-soft:#bbecd7;
+  --a-warn-soft:#ffd9c8; --a-info-soft:#c6e6ff;
+  background:var(--a-bg); color:var(--a-ink);
+  font-family:'Noto Sans KR','Apple SD Gothic Neo',sans-serif;
+  font-size:13px; line-height:1.5; min-width:860px;
+}
+.app *{box-sizing:border-box}
+.app .cap{font-size:11px; color:var(--a-muted)}
+.app .card{background:var(--a-card); border:1px solid var(--a-line); border-radius:9px; padding:11px 13px}
+.app .rule{height:1px; background:var(--a-line); margin:13px 0 11px}
+.app h1{font-size:16px; font-weight:800; margin:0; letter-spacing:-.01em}
+.app .hdr{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:13px}
+.app .hdr .meta{font-size:11px; color:var(--a-muted)}
+.app .btn{
+  display:block; width:100%; text-align:center; background:var(--a-card); color:var(--a-ink);
+  border:1px solid var(--a-line); border-radius:6px; padding:8px 6px; margin-bottom:5px;
+  font-size:12px; font-weight:500;
+}
+.app .btn.sel{background:var(--a-select); color:#fff; border-color:var(--a-select); font-weight:600}
+.app .btn.alert{background:var(--a-alert-soft); color:var(--a-alert); border-color:var(--a-strong); font-weight:600}
+.app .btn.warn{background:var(--a-warn-soft); color:var(--a-ink); border-color:var(--a-strong); font-weight:600}
+.app .btn.charging{border-left:3px solid var(--a-action)}
+.app .btn small{display:block; font-size:10px; font-weight:400; opacity:.7; margin-top:1px}
+.app .packbox{max-height:206px; overflow:hidden; position:relative}
+.app .packbox::after{
+  content:""; position:absolute; left:0; right:0; bottom:0; height:30px;
+  background:linear-gradient(to bottom, rgba(247,247,247,0), var(--a-bg));
+}
+.app .seg{display:flex; border:1px solid var(--a-line); border-radius:6px; overflow:hidden; margin-bottom:9px}
+.app .seg span{flex:1; text-align:center; padding:6px; font-size:12px; background:var(--a-card)}
+.app .seg span.on{background:var(--a-ink); color:#fff; font-weight:600}
+.app .select{
+  display:flex; justify-content:space-between; align-items:center;
+  background:var(--a-card); border:1px solid var(--a-line); border-radius:6px;
+  padding:7px 10px; font-size:12px;
+}
+.app .select::after{content:"⌄"; color:var(--a-faint); line-height:1}
+
+.app .verdict{border:1px solid var(--a-line); border-radius:9px; padding:13px 15px; height:100%}
+.app .verdict .tag{font-size:11px; opacity:.8}
+.app .verdict h2{font-size:23px; font-weight:800; margin:2px 0 3px; letter-spacing:-.02em; font-family:inherit}
+.app .verdict .sub{font-size:11px; opacity:.85; margin-bottom:11px}
+.app .verdict .nums{display:flex; gap:26px}
+.app .verdict .nums .k{font-size:10px; opacity:.75}
+.app .verdict .nums .v{font-size:15px; font-weight:700; font-variant-numeric:tabular-nums}
+.app .verdict .past{
+  margin-top:11px; padding-top:8px; border-top:1px solid currentColor; opacity:.72;
+  font-size:10.5px; display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;
+}
+.app .verdict .past .hint{margin-left:auto; opacity:.72; font-size:10px}
+
+.app .tiles{display:grid; grid-template-columns:repeat(8,1fr); gap:5px}
+.app .tiles.four{grid-template-columns:repeat(4,1fr)}
+.app .tile{
+  border:1px solid var(--a-line); border-radius:6px; background:var(--a-card);
+  padding:9px 4px; text-align:center; font-size:11px; font-weight:600; white-space:nowrap;
+}
+.app .tile.flag-alert{background:var(--a-alert-soft); color:var(--a-alert); border-color:var(--a-strong)}
+.app .tile.flag-warn{background:var(--a-warn-soft); border-color:var(--a-strong)}
+.app .tile.sel{outline:2px solid var(--a-select); outline-offset:-2px}
+.app .tile.past{box-shadow:inset 4px 0 0 var(--a-alert)}
+
+.app .chartcard{background:var(--a-card); border:1px solid var(--a-line); border-radius:9px; padding:9px 10px}
+.app .toggle{display:flex; align-items:center; gap:6px; font-size:11px; color:var(--a-muted); justify-content:flex-end}
+.app .toggle i{width:26px; height:15px; border-radius:99px; background:var(--a-strong); display:inline-block; position:relative}
+.app .toggle i::after{content:""; position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:50%; background:#fff}
+.app .toggle.on i{background:var(--a-select)}
+.app .toggle.on i::after{left:auto; right:2px}
+.app svg.chart{display:block; width:100%; height:auto}
+.app .chart .grid{stroke:#e1e1e1; stroke-width:1}
+.app .chart .ch{fill:none; stroke:#a3a3a3; stroke-width:1.1}
+.app .chart .hi{fill:none; stroke:#da3944; stroke-width:1.7}
+.app .chart .t1{fill:none; stroke:#2a72e5; stroke-width:1.6}
+.app .chart .t2{fill:none; stroke:#4c4c4c; stroke-width:1.6}
+.app .chart .band{fill:#da3944; opacity:.13}
+.app .chart .band.warn{fill:#f08a3c; opacity:.16}
+.app .chart text{font-size:8px; fill:#a3a3a3; font-family:'IBM Plex Mono',monospace}
+
+.app .row{
+  display:flex; gap:11px; align-items:baseline; padding:6px 3px;
+  border-bottom:1px solid var(--a-line); font-size:11.5px;
+}
+.app .row:last-of-type{border-bottom:none}
+.app .row.dim{opacity:.55}
+.app .row.here{border-left:3px solid var(--a-action); padding-left:7px}
+.app .pill{border-radius:99px; padding:1px 8px; font-size:10px; font-weight:600; white-space:nowrap}
+.app .pill.alert{background:var(--a-alert-soft); color:var(--a-alert)}
+.app .pill.warn{background:var(--a-warn-soft); color:var(--a-ink)}
+.app .pill.ok{background:var(--a-ok-soft); color:var(--a-ok)}
+.app .row .when{margin-left:auto; color:var(--a-muted); font-size:10px}
+.app .stat{display:flex; gap:22px}
+.app .stat .n{font-size:19px; font-weight:800; line-height:1.3; font-variant-numeric:tabular-nums}
+.app .foot{font-size:10.5px; color:var(--a-muted); margin-top:13px}
+.app .ctlbtn{
+  border-radius:6px; padding:7px 4px; font-size:12px; font-weight:600; text-align:center;
+  border:1px solid var(--a-line); background:var(--a-card);
+}
+.app .ctlbtn.primary{background:var(--a-select); border-color:var(--a-select); color:#fff}
+.app .info{
+  background:#e8f2ff; border-left:3px solid var(--a-action); border-radius:6px;
+  padding:10px 12px; font-size:12px; color:#123a6d;
+}
+.app .okbox{
+  background:var(--a-ok-soft); border-radius:6px; padding:9px 12px; font-size:12px; color:#0b3f31;
+  display:flex; gap:8px; align-items:center;
+}
+.app .errbox{
+  background:var(--a-alert-soft); border-radius:6px; padding:9px 12px; font-size:12px; color:#8d1620;
+  display:flex; gap:8px; align-items:center;
+}
+.app .code{
+  background:#f2f3f5; border:1px solid var(--a-line); border-radius:6px; padding:9px 11px;
+  font-family:'IBM Plex Mono',monospace; font-size:11px; color:#262626; overflow-x:auto; white-space:nowrap;
+}
+.app .empty{color:var(--a-muted); font-size:11.5px}
+</style>
+
+<div class="wrap">
+
+<header class="cover">
+  <div class="eyebrow">app.py · 2026-08-04 → 08-29</div>
+  <h1>배터리팩 품질검사 대시보드,<br>첫 커밋부터 지금까지 전부</h1>
+  <p class="prose">저장소가 비어 있던 날부터 세면 커밋 13개다. 그중 화면(<span class="mono">app.py</span>)을 실제로 건드린 것은 네 개,
+  거기에 아직 커밋하지 않은 작업본을 더해 <b>다섯 판</b>. 이 문서는 그 다섯 판을 전체 화면으로 한 컷씩 보여주고,
+  각 판이 <b>상황에 따라 달리 보여 주는 화면들</b> — 빈 화면, 판정 대기, 정상·주의·이상, 오류, 조작 결과 — 까지 모두 되살렸다.</p>
+
+  <div class="facts">
+    <div class="fact"><div class="k">commits</div><div class="v">13<small> (화면 변경 4)</small></div></div>
+    <div class="fact"><div class="k">stages</div><div class="v">5</div></div>
+    <div class="fact"><div class="k">screens</div><div class="v">37<small> 컷</small></div></div>
+    <div class="fact"><div class="k">app.py</div><div class="v">0 → 1,547<small> 줄</small></div></div>
+  </div>
+
+  <p class="disclaimer">아래 화면은 <b>실제 스크린샷이 아니라, 각 시점의 <span class="mono">app.py</span> 코드(레이아웃·팔레트·문구·분기)를
+  읽어 HTML로 다시 그린 재현 화면</b>이다. 옛 버전은 그때의 Kafka·api·모델이 함께 떠 있어야 켜지는데 그 조합이 남아 있지 않아
+  되돌려 찍을 수 없다. 숫자와 팩 번호는 예시값이고, 배치·색·문구·어떤 상황에서 무엇이 뜨는지는 코드를 그대로 따랐다.</p>
+
+  <div class="tlwrap">
+    <table class="tl">
+      <thead><tr><th>커밋</th><th>날짜</th><th>화면</th><th>내용</th></tr></thead>
+      <tbody>
+        <tr><td class="sha">9682145</td><td class="date">08-04</td><td><span class="mark off">없음</span></td><td class="msg">Initial commit — LICENSE 뿐, <span class="mono">app.py</span> 도 없다</td></tr>
+        <tr class="hit"><td class="sha">21b63e2</td><td class="date">08-11</td><td><span class="mark on">01 새로 생김</span></td><td class="msg">개발 환경 구축: devcontainer + FastAPI/Streamlit/Kafka/Postgres</td></tr>
+        <tr><td class="sha">520a7b6</td><td class="date">08-11</td><td><span class="mark off">그대로</span></td><td class="msg">docker-compose 수정 — 이미지를 docker hub 경유로</td></tr>
+        <tr><td class="sha">dfeebe3</td><td class="date">08-12</td><td><span class="mark off">그대로</span></td><td class="msg">컨테이너에서 import 안 되던 문제, PYTHONPATH 추가</td></tr>
+        <tr><td class="sha">c346646</td><td class="date">08-14</td><td><span class="mark off">그대로</span></td><td class="msg">프로젝트 이름 변경에 따른 컨테이너 이름 오류 수정</td></tr>
+        <tr><td class="sha">f966fbb</td><td class="date">08-14</td><td><span class="mark off">그대로</span></td><td class="msg">docker 경로 의존성 예방 — main 직접 push 의 마지막</td></tr>
+        <tr><td class="sha">dd4e048</td><td class="date">08-18</td><td><span class="mark off">그대로</span></td><td class="msg">index on main (stash)</td></tr>
+        <tr><td class="sha">058a7d8</td><td class="date">08-18</td><td><span class="mark off">그대로</span></td><td class="msg">WIP on main (stash)</td></tr>
+        <tr><td class="sha">4e776c8</td><td class="date">08-22</td><td><span class="mark off">그대로</span></td><td class="msg">센서 제네레이터 — 원시 데이터를 Kafka 로 보내기</td></tr>
+        <tr><td class="sha">a3b5a54</td><td class="date">08-22</td><td><span class="mark off">그대로</span></td><td class="msg">feature/frontend 병합</td></tr>
+        <tr><td class="sha">a6a2f97</td><td class="date">08-24</td><td><span class="mark off">그대로</span></td><td class="msg">다음은 streamlit 구현 → kafka 연결 확인 예정</td></tr>
+        <tr class="hit"><td class="sha">2e1248a</td><td class="date">08-25</td><td><span class="mark on">02 전면 교체</span></td><td class="msg">api–streamlit 연결 후 데이터 형태 가공</td></tr>
+        <tr class="hit"><td class="sha">7e7178f</td><td class="date">08-26</td><td><span class="mark on">03 표면 분리</span></td><td class="msg">모델 연결 + <span class="mono">--anomaly</span> 이상치 주입</td></tr>
+        <tr class="hit"><td class="sha">2c2e7ea</td><td class="date">08-27</td><td><span class="mark on">04 이력·조작</span></td><td class="msg">새 모델 연결, 초기화/재생 버튼 구현</td></tr>
+        <tr class="hit"><td class="sha">—</td><td class="date">작업본</td><td><span class="mark on">05 말 교체</span></td><td class="msg">아직 커밋하지 않은 변경 (+42 −11)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</header>
+
+<!-- ================= 00 ================= -->
+<section class="stage">
+  <div class="stage-head">
+    <div class="num">00</div>
+    <div>
+      <h2>화면이 없던 일주일</h2>
+      <div class="meta"><span class="sha">9682145</span><span>2026-08-04</span><span>app.py 없음</span></div>
+      <p class="lede">저장소의 첫 커밋에는 <span class="mono">LICENSE</span> 하나뿐이다. Streamlit 은 물론 파이썬 파일도 없다.
+      화면 이야기의 출발점은 여기 — <b>아무것도 없는 상태</b>이고, 이 상태가 일주일 간다.</p>
+    </div>
+  </div>
+  <div class="stage-body">
+    <figure>
+      <div class="frame">
+        <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="url">localhost:8501 — 연결할 수 없음</span></div>
+        <div class="scroller">
+          <div class="app fit" style="background:var(--panel-2); padding:52px 30px; text-align:center">
+            <div style="font-family:'IBM Plex Mono',monospace; font-size:12px; color:#a3a3a3">
+              app.py &nbsp;—&nbsp; 파일 없음</div>
+          </div>
+        </div>
+      </div>
+      <figcaption>9682145 — 띄울 화면 자체가 없다</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ================= 01 ================= -->
+<section class="stage">
+  <div class="stage-head">
+    <div class="num">01</div>
+    <div>
+      <h2>연결만 확인하던 껍데기</h2>
+      <div class="meta"><span class="sha">21b63e2</span><span>2026-08-11</span><span>app.py 18줄</span>
+        <span>화면 2컷</span></div>
+      <p class="lede">개발 환경을 세우면서 같이 올라온 첫 화면. 하는 일은 하나다 —
+      <span class="mono">GET /health</span> 를 한 번 때려 보고 결과를 그대로 찍는다.
+      데이터도, 차트도, 팩이라는 개념도 아직 없다. 파일 첫 줄의 주석이 그대로 상태를 말한다:
+      <em>“Streamlit 껍데기. 여기에 실제 화면을 채워 나간다.”</em>
+      <span class="mono">try/except</span> 하나뿐이라 이 판이 보여줄 수 있는 화면도 딱 두 가지다.</p>
+    </div>
+  </div>
+
+  <div class="stage-body">
+    <figure>
+      <div class="frame">
+        <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="url">localhost:8501 — dockerimage</span></div>
+        <div class="scroller">
+          <div class="app" style="padding:26px 30px 44px; background:#fff; min-width:520px">
+            <h1 style="font-size:30px; font-weight:700; margin-bottom:18px">dockerimage</h1>
+            <div class="okbox" style="max-width:560px">
+              <span style="color:#058765; font-weight:700">✓</span>
+              <span>API 연결 정상: {'status': 'ok'}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>21b63e2 — api 가 살아 있을 때</figcaption>
+    </figure>
+
+    <div class="gal-head"><h3>이 판이 낼 수 있는 화면 전부</h3><span>2 / 2</span></div>
+    <p class="gal-note">제목은 <span class="mono">page_title</span> 과 같은 <span class="mono">"dockerimage"</span> 다.
+    프로젝트 이름을 정하기 전이라 컨테이너 이미지 이름을 그대로 썼다.</p>
+    <div class="gallery wide">
+      <div class="shot">
+        <div class="lbl"><b>연결 성공</b><span>st.success</span></div>
+        <div class="body"><div class="app fit">
+          <h1 style="font-size:22px; font-weight:700; margin-bottom:12px">dockerimage</h1>
+          <div class="okbox"><span style="color:#058765; font-weight:700">✓</span>
+            <span>API 연결 정상: {'status': 'ok'}</span></div>
+        </div></div>
+        <div class="note"><span class="mono">response.json()</span> 을 손대지 않고 그대로 찍는다.</div>
+      </div>
+      <div class="shot">
+        <div class="lbl"><b>연결 실패</b><span>st.error</span></div>
+        <div class="body"><div class="app fit">
+          <h1 style="font-size:22px; font-weight:700; margin-bottom:12px">dockerimage</h1>
+          <div class="errbox"><span style="font-weight:700">✕</span>
+            <span>API에 연결하지 못했습니다: HTTPConnectionPool(host='localhost', port=3000) …</span></div>
+        </div></div>
+        <div class="note">api 컨테이너가 아직 안 떴을 때. 예외 문구를 그대로 노출한다 — 이 시점의 화면은 사용자가 아니라 만든 사람이 본다.</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><span class="tag">생김</span><span>제목과 API 헬스 체크
+        <span class="why">FastAPI · Kafka · Postgres 컨테이너가 서로 보이는지 눈으로 확인하는 용도</span></span></li>
+      <li><span class="tag">없음</span><span>측정 데이터, 판정, 팩 선택, 차트
+        <span class="why">이 시점의 화면은 데이터 소스에 아예 붙어 있지 않다</span></span></li>
+      <li><span class="tag">이후</span><span>08-11 ~ 08-24 커밋 9개 동안 이 18줄은 <b>한 글자도 바뀌지 않는다</b>
+        <span class="why">그동안 손이 간 곳은 docker-compose · PYTHONPATH · 센서 제네레이터 · Kafka 스펙 문서였다</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 02 ================= -->
+<section class="stage">
+  <div class="stage-head">
+    <div class="num">02</div>
+    <div>
+      <h2>한 번에 들어선 관제 화면</h2>
+      <div class="meta"><span class="sha">2e1248a</span><span>2026-08-25</span><span>app.py 762줄</span>
+        <span>+744</span></div>
+      <p class="lede">DB를 직접 읽던 뼈대를 걷어 내고 Kafka 두 토픽 구독으로 갈아탄 판이다.
+      측정 토픽은 차트·충전량·수신 현황을, 판정 토픽은 타일 색·판정 카드·알림을 맡는다.
+      <b>화면은 판단하지 않는다</b> — 판정은 api 가 한 번만 하고 화면은 받은 <span class="mono">state</span> 를 칠하기만 한다는
+      역할 분담이 이때 정해졌다. 3초마다 <span class="mono">st.fragment(run_every)</span> 로 스스로 다시 그린다.</p>
+    </div>
+  </div>
+
+  <div class="stage-body">
+    <figure>
+      <div class="frame">
+        <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="url">localhost:8501 — 배터리팩 품질검사 모니터링</span></div>
+        <div class="scroller">
+          <div class="app" style="padding:16px 18px 20px">
+            <div style="display:grid; grid-template-columns:1fr 3.4fr; gap:18px">
+
+              <!-- 왼쪽 -->
+              <div>
+                <div class="card" style="margin-bottom:9px">
+                  <div style="font-size:11px; color:#5d5d5d">2026년 8월 25일 (월)</div>
+                  <div style="font-size:26px; font-weight:800; line-height:1.3">14:06</div>
+                  <div style="font-size:11px; color:#5d5d5d">라인 가동 07:00 –</div>
+                </div>
+                <div class="cap" style="margin-bottom:5px">검사 대상 팩</div>
+                <div class="seg"><span class="on">충전</span><span>방전</span></div>
+                <div class="packbox">
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px">
+                    <div class="btn sel"><b>PACK 1000</b><small>1,204 스텝</small></div>
+                    <div class="btn"><b>PACK 1001</b><small>1,180 스텝</small></div>
+                    <div class="btn"><b>PACK 1002</b><small>1,241 스텝</small></div>
+                    <div class="btn"><b>PACK 1003</b><small>1,199 스텝</small></div>
+                    <div class="btn"><b>PACK 1004</b><small>1,162 스텝</small></div>
+                    <div class="btn"><b>PACK 1005</b><small>1,208 스텝</small></div>
+                    <div class="btn"><b>PACK 1006</b><small>1,174 스텝</small></div>
+                    <div class="btn"><b>PACK 1007</b><small>1,193 스텝</small></div>
+                  </div>
+                </div>
+                <div class="cap" style="margin:9px 0 4px">차트 표시 구간</div>
+                <div class="select">10분</div>
+                <div class="card" style="margin-top:11px; font-size:11px; line-height:1.9">
+                  <div class="cap">파이프라인 수신 현황</div>
+                  <div>측정&nbsp; <b>1,842</b>건 · 3초 전</div>
+                  <div>판정&nbsp; <b>612</b>건 · 4초 전</div>
+                  <div style="color:#5d5d5d">이상 4 · 주의 7 · 정상 601 · 유실 0 · 중복 0</div>
+                </div>
+              </div>
+
+              <!-- 오른쪽 -->
+              <div>
+                <div class="hdr">
+                  <h1>배터리팩 품질검사 모니터링</h1>
+                  <div class="meta">PACK 1000 · 충전 · Kafka 실시간 수신 중</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:14px">
+                  <div class="verdict" style="background:#ffd8d7; color:#da3944">
+                    <div class="tag">● 판정 · joint-ae v1</div>
+                    <h2>이상 감지</h2>
+                    <div class="sub">M05 CV06 전압 편차 확대 · seq 1,204</div>
+                    <div class="nums">
+                      <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+                      <div><div class="k">문제 셀</div><div class="v">CV06</div></div>
+                      <div><div class="k">차트 구간</div><div class="v">600초</div></div>
+                    </div>
+                  </div>
+                  <div class="chartcard" style="display:flex; flex-direction:column; align-items:center; justify-content:center">
+                    <svg class="chart" viewBox="0 0 120 92" style="max-width:150px">
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#e1e1e1" stroke-width="15"/>
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#2a72e5" stroke-width="15"
+                              stroke-dasharray="116.9 188.5" transform="rotate(-90 60 52)"/>
+                      <text x="60" y="50" text-anchor="middle" style="font-size:17px; font-weight:700; fill:#262626">62%</text>
+                      <text x="60" y="64" text-anchor="middle" style="font-size:8px; fill:#5d5d5d">충전량</text>
+                    </svg>
+                    <div style="text-align:center; font-size:10.5px; color:#5d5d5d; margin-top:-6px">
+                      <span style="background:#ffd8d7; color:#da3944; border:1px solid #e1e1e1; border-radius:99px;
+                                   padding:1px 8px; font-weight:600">이상</span>
+                      &nbsp;M05 CV06
+                      <div style="margin-top:4px; color:#262626">seq 1,204 · 충전 중 ↑</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:13px 0 5px">모듈별 상태 · 16개 &nbsp;·&nbsp; 눌러서 아래 차트를 바꾼다 · 색은 api 판정</div>
+                <div class="tiles">
+                  <div class="tile">M01</div><div class="tile">M02</div><div class="tile">M03</div><div class="tile">M04</div>
+                  <div class="tile flag-alert sel">M05</div><div class="tile">M06</div><div class="tile">M07</div><div class="tile">M08</div>
+                  <div class="tile">M09</div><div class="tile">M10</div><div class="tile">M11</div><div class="tile">M12</div>
+                  <div class="tile">M13</div><div class="tile">M14</div><div class="tile">M15</div><div class="tile">M16</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">
+                  <div class="chartcard">
+                    <div style="display:flex; justify-content:space-between; align-items:center">
+                      <div class="cap">M05 셀 전압 <b style="color:#262626">11채널</b></div>
+                      <div class="toggle"><i></i>편차 보기</div>
+                    </div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <defs><path id="cvA" d="M6,84 C70,79 110,73 160,64 C215,55 265,47 320,38 C355,32 380,28 394,26"/></defs>
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <use href="#cvA" class="ch" y="-14"/><use href="#cvA" class="ch" y="-11"/>
+                      <use href="#cvA" class="ch" y="-8"/><use href="#cvA" class="ch" y="-5"/>
+                      <use href="#cvA" class="ch" y="-2"/><use href="#cvA" class="ch" y="1"/>
+                      <use href="#cvA" class="ch" y="4"/><use href="#cvA" class="ch" y="7"/>
+                      <use href="#cvA" class="ch" y="10"/><use href="#cvA" class="ch" y="13"/>
+                      <path class="hi" d="M6,86 C70,81 110,75 160,66 C200,60 220,60 240,74 C258,86 272,58 300,44 C340,34 372,30 394,28"/>
+                      <text x="6" y="100">14:00</text><text x="360" y="100">14:10</text>
+                      <text x="360" y="20" style="fill:#da3944">CV06</text>
+                    </svg>
+                  </div>
+                  <div class="chartcard">
+                    <div class="cap">M05 모듈 온도 <b style="color:#262626">T01 · T02</b></div>
+                    <div style="height:19px"></div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <path class="t1" d="M6,74 C70,71 120,68 180,60 C240,52 300,46 394,40"/>
+                      <path class="t2" d="M6,80 C70,78 120,76 180,70 C240,64 300,60 394,55"/>
+                      <text x="6" y="100">14:00</text><text x="360" y="100">14:10</text>
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:14px 0 5px">최근 알림</div>
+                <div class="card" style="padding:6px 12px">
+                  <div class="row"><span class="pill alert">이상</span><b>PACK 1000</b>
+                    <span>M05 CV06 전압 편차 확대</span><span class="when">측정 14:06:12 · seq 1,204</span></div>
+                  <div class="row"><span class="pill warn">주의</span><b>PACK 1003</b>
+                    <span>M11 온도 상승 추세</span><span class="when">측정 14:05:41 · seq 1,197</span></div>
+                  <div class="row"><span class="pill alert">이상</span><b>PACK 1005</b>
+                    <span>M02 CV03 전압 급락</span><span class="when">측정 14:04:08 · seq 1,141</span></div>
+                </div>
+
+                <div class="foot">측정 battery.pack.measurement · 판정 battery.pack.verdict 구독. 판정은 api 의 모델 joint-ae v1 이 낸 것이다 (점수 없이 판정만 온다)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>2e1248a — 회색 페이지 위에 흰 카드. 좌우가 아직 같은 표면을 쓴다</figcaption>
+    </figure>
+
+
+    <div class="gal-head"><h3>같은 판이 상황에 따라 내놓는 화면들</h3><span>02 · 9컷</span></div>
+    <p class="gal-note">이 판부터는 화면이 하나가 아니다. 측정이 아직 안 왔을 때, 판정이 아직 안 왔을 때,
+    판정이 정상·주의·이상일 때가 각각 다른 그림이다. 아래는 <span class="mono">2e1248a</span> 의 코드가 그리는 갈래 전부다.</p>
+
+    <div class="gallery wide">
+
+      <div class="shot">
+        <div class="lbl"><b>측정 수신 전</b><span>sections 비어 있음</span></div>
+        <div class="body"><div class="app fit">
+          <div class="hdr" style="margin-bottom:9px"><h1 style="font-size:14px">배터리팩 품질검사 모니터링</h1>
+            <div class="meta">Kafka 수신 대기 중</div></div>
+          <div class="info">아직 수신한 측정이 없습니다. sensor generator 를 실행하면 몇 초 안에 화면이 채워집니다.</div>
+          <div class="code" style="margin-top:7px">docker compose exec dev python sensor_generator.py --limit 100</div>
+        </div></div>
+        <div class="note">본문에 실행할 명령까지 적어 뒀다 — 이때는 화면을 띄우는 사람이 곧 만든 사람이었다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>판정 대기 중</b><span>verdict is None</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#fff; color:#5d5d5d">
+            <div class="tag">● 판정</div>
+            <h2>판정 대기 중</h2>
+            <div class="sub" style="margin-bottom:0">api 의 판정 메시지를 기다리고 있습니다 — api 컨테이너가 떠 있는지 확인하세요</div>
+          </div>
+        </div></div>
+        <div class="note">측정이 먼저 오고 판정은 api 를 거쳐 오므로, 켠 직후 잠깐은 이 카드가 정상이다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>정상 범위</b><span>state = normal</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#bbecd7; color:#058765">
+            <div class="tag">● 판정 · joint-ae v1</div>
+            <h2>정상 범위</h2>
+            <div class="sub">임계 내 · seq 1,180</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">–</div></div>
+              <div><div class="k">문제 셀</div><div class="v">–</div></div>
+              <div><div class="k">차트 구간</div><div class="v">600초</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">정상이면 모델이 짚을 곳이 없어 지목 두 칸은 <span class="mono">–</span> 로 둔다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>주의 관찰</b><span>state = warning</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#ffd9c8; color:#262626">
+            <div class="tag">● 판정 · joint-ae v1</div>
+            <h2>주의 관찰</h2>
+            <div class="sub">M11 온도 상승 추세 · seq 1,197</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M11</div></div>
+              <div><div class="k">문제 셀</div><div class="v">–</div></div>
+              <div><div class="k">차트 구간</div><div class="v">600초</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">주의만 전경색이 잉크색이다. 주황 틴트 위에서 주황 글자는 읽히지 않는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>이상 감지</b><span>state = anomaly</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#ffd8d7; color:#da3944">
+            <div class="tag">● 판정 · joint-ae v1</div>
+            <h2>이상 감지</h2>
+            <div class="sub">M05 CV06 전압 편차 확대 · seq 1,204</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+              <div><div class="k">문제 셀</div><div class="v">CV06</div></div>
+              <div><div class="k">차트 구간</div><div class="v">600초</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">타일 16개 중 지목된 하나만 이 색으로 칠해진다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>도넛 · 판정 대기</b><span>충전량 게이지</span></div>
+        <div class="body"><div class="app fit"><div class="chartcard" style="display:flex; flex-direction:column; align-items:center">
+          <svg class="chart" viewBox="0 0 120 92" style="max-width:140px">
+            <circle cx="60" cy="52" r="30" fill="none" stroke="#e1e1e1" stroke-width="15"/>
+            <circle cx="60" cy="52" r="30" fill="none" stroke="#2a72e5" stroke-width="15"
+                    stroke-dasharray="64 188.5" transform="rotate(-90 60 52)"/>
+            <text x="60" y="50" text-anchor="middle" style="font-size:17px; font-weight:700; fill:#262626">34%</text>
+            <text x="60" y="64" text-anchor="middle" style="font-size:8px; fill:#5d5d5d">충전량</text>
+          </svg>
+          <div style="text-align:center; font-size:10.5px; color:#5d5d5d; margin-top:-6px">
+            <span style="background:#fff; color:#5d5d5d; border:1px solid #e1e1e1; border-radius:99px;
+                         padding:1px 8px; font-weight:600">판정 대기</span>&nbsp;–
+            <div style="margin-top:4px; color:#262626">seq 12 · 충전 중 ↑</div>
+          </div>
+        </div></div></div>
+        <div class="note">가운데 ‘충전량’ 라벨이 없으면 이 게이지는 재생 진행도로 읽힌다. 실제로 41%를 진행도로 오해한 일이 있었다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>방전 구간 · 목록 비어 있음</b><span>segmented control</span></div>
+        <div class="body"><div class="app fit">
+          <div class="cap" style="margin-bottom:5px">검사 대상 팩</div>
+          <div class="seg"><span>충전</span><span class="on">방전</span></div>
+          <div class="empty">이 구간의 측정이 아직 도착하지 않았습니다</div>
+        </div></div>
+        <div class="note">재생 순서가 충전 전량 → 방전 전량이라, 초반에 방전 목록이 비어 있는 것은 정상이다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>알림 없음</b><span>recent_alerts 비어 있음</span></div>
+        <div class="body"><div class="app fit">
+          <div class="cap" style="margin-bottom:5px">최근 알림</div>
+          <div class="card"><span class="empty">알림 없음 — 지금까지의 판정이 모두 정상 범위입니다</span></div>
+        </div></div>
+        <div class="note">이 목록은 이상·주의만 쌓는다. 정상 팩은 아예 등장하지 않는다 — 04에서 뒤집히는 지점이다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>편차 보기 켬</b><span>V → mV</span></div>
+        <div class="body"><div class="app fit"><div class="chartcard">
+          <div style="display:flex; justify-content:space-between; align-items:center">
+            <div class="cap">M05 셀 전압 <b style="color:#262626">11채널</b></div>
+            <div class="toggle on"><i></i>편차 보기</div>
+          </div>
+          <svg class="chart" viewBox="0 0 400 100">
+            <defs><path id="dvA" d="M6,52 C60,50 110,53 160,51 C215,49 265,52 320,50 C355,49 380,51 394,50"/></defs>
+            <line class="grid" x1="6" y1="52" x2="394" y2="52"/>
+            <use href="#dvA" class="ch" y="-16"/><use href="#dvA" class="ch" y="-12"/>
+            <use href="#dvA" class="ch" y="-8"/><use href="#dvA" class="ch" y="-4"/>
+            <use href="#dvA" class="ch" y="0"/><use href="#dvA" class="ch" y="4"/>
+            <use href="#dvA" class="ch" y="8"/><use href="#dvA" class="ch" y="12"/>
+            <use href="#dvA" class="ch" y="16"/><use href="#dvA" class="ch" y="20"/>
+            <path class="hi" d="M6,54 C60,52 110,55 160,53 C190,52 205,70 225,84 C245,92 265,60 320,54 C355,52 380,54 394,53"/>
+            <text x="8" y="46">0 mV</text><text x="356" y="96">14:10</text>
+          </svg>
+        </div></div></div>
+        <div class="note">각 채널에서 그 시점 11셀 평균을 뺀다(<span class="mono">(v − mean) × 1000</span>).
+        3.6~4.1V 안에 뭉쳐 있던 선들이 0을 기준으로 펼쳐져, 혼자 처지는 셀이 드러난다.</div>
+      </div>
+
+    </div>
+
+    <ul class="changes">
+      <li><span class="tag">레이아웃</span><span>왼쪽 열(1) : 본문(3.4) 2단 구성이 자리를 잡았다
+        <span class="why">왼쪽은 고르는 곳, 오른쪽은 보는 곳</span></span></li>
+      <li><span class="tag">팩 목록</span><span>충전/방전 세그먼트 + 2열 버튼 격자, 스텝 수는 <span class="mono">::after</span> 로 둘째 줄에 붙였다
+        <span class="why">라디오 대신 버튼 — 동그라미를 CSS로 숨기면 Streamlit DOM이 바뀔 때 깨진다</span></span></li>
+      <li><span class="tag">판정 카드</span><span>제목은 <b>이상 감지 / 주의 관찰 / 정상 범위</b>, 숫자 칸은 문제 모듈 · 문제 셀 · 차트 구간</span></li>
+      <li><span class="tag">모듈 타일</span><span>16칸 격자에 <span class="mono">M01</span> 번호만. 판정이 짚은 한 칸에만 색이 들어간다</span></li>
+      <li><span class="tag">아래</span><span>이상·주의만 쌓는 <b>최근 알림</b> 목록</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 03 ================= -->
+<section class="stage">
+  <div class="stage-head">
+    <div class="num">03</div>
+    <div>
+      <h2>표면을 갈라 레일을 세우다</h2>
+      <div class="meta"><span class="sha">7e7178f</span><span>2026-08-26</span><span>app.py 948줄</span>
+        <span>+186</span></div>
+      <p class="lede">모델을 붙이고 <span class="mono">sensor_generator --anomaly</span> 로 이상치를 주입하기 시작한 커밋.
+      화면 쪽 변화의 핵심은 <b>좌우를 다른 표면으로 나눈 것</b>이다. 본문이 흰 종이, 왼쪽 레일이 회색 판.
+      선 하나로 나누는 것보다 확실해서, 레일 위의 흰 카드는 “얹힌 것”으로 읽히고 본문의 카드는 헤어라인으로만 떠오른다.
+      방전 구간은 목록에서 아예 빠졌고, 팩 버튼은 한 줄에 하나씩 서면서 <b>제 상태를 라벨에 달고</b> 나온다.</p>
+    </div>
+  </div>
+
+  <div class="stage-body">
+    <figure>
+      <div class="frame">
+        <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="url">localhost:8501 — 배터리팩 품질검사 모니터링</span></div>
+        <div class="scroller">
+          <div class="app" style="background:#fff">
+            <div style="display:grid; grid-template-columns:1fr 3.6fr; gap:10px">
+
+              <!-- 레일 -->
+              <div style="background:#f7f7f7; border-right:1px solid #e1e1e1; padding:18px 13px 22px">
+                <div style="font-size:11px; color:#5d5d5d">2026년 8월 26일 (화)</div>
+                <div style="font-size:11px; color:#5d5d5d; margin-top:6px">현재 시각</div>
+                <div style="font-size:26px; font-weight:800; line-height:1.3">14:06</div>
+                <div style="font-size:11px; color:#5d5d5d">라인 가동 07:00 –</div>
+                <div class="rule"></div>
+
+                <div class="cap" style="margin-bottom:6px">검사 대상 팩</div>
+                <div class="packbox" style="max-height:214px">
+                  <div class="btn sel charging">PACK 1000 · 정상</div>
+                  <div class="btn">PACK 1001 · 정상</div>
+                  <div class="btn alert">PACK 1002 · 이상</div>
+                  <div class="btn">PACK 1003 · 판정 전</div>
+                  <div class="btn warn">PACK 1004 · 주의</div>
+                  <div class="btn">PACK 1005 · 정상</div>
+                  <div class="btn">PACK 1006 · 대기</div>
+                </div>
+
+                <div class="rule"></div>
+                <div class="cap" style="margin-bottom:4px">차트 표시 구간</div>
+                <div class="select">10분</div>
+
+                <div class="rule"></div>
+                <div class="cap" style="margin-bottom:6px">파이프라인 수신 현황</div>
+                <div class="stat">
+                  <div><div style="font-size:11px; color:#5d5d5d">측정</div>
+                    <div class="n">1,842</div><div style="font-size:10px; color:#a3a3a3">3초 전</div></div>
+                  <div><div style="font-size:11px; color:#5d5d5d">판정</div>
+                    <div class="n">612</div><div style="font-size:10px; color:#a3a3a3">4초 전</div></div>
+                </div>
+                <div style="font-size:10.5px; color:#5d5d5d; margin-top:7px">이상 4 · 주의 7 · 정상 601 · 유실 0 · 중복 0</div>
+              </div>
+
+              <!-- 본문 -->
+              <div style="padding:18px 18px 20px 7px">
+                <div class="hdr">
+                  <h1>배터리팩 품질검사 모니터링</h1>
+                  <div class="meta">PACK 1000 · 충전 · Kafka 실시간 수신 중</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:14px">
+                  <div class="verdict" style="background:#ffd8d7; color:#da3944">
+                    <div class="tag">● 판정 · joint-ae v2</div>
+                    <h2>이상 감지</h2>
+                    <div class="sub">M05 CV06 전압 편차 확대 · seq 1,204</div>
+                    <div class="nums">
+                      <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+                      <div><div class="k">문제 셀</div><div class="v">CV06</div></div>
+                      <div><div class="k">차트 구간</div><div class="v">600초</div></div>
+                    </div>
+                  </div>
+                  <div class="chartcard" style="display:flex; flex-direction:column; align-items:center; justify-content:center">
+                    <svg class="chart" viewBox="0 0 120 92" style="max-width:150px">
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#e1e1e1" stroke-width="15"/>
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#2a72e5" stroke-width="15"
+                              stroke-dasharray="116.9 188.5" transform="rotate(-90 60 52)"/>
+                      <text x="60" y="50" text-anchor="middle" style="font-size:17px; font-weight:700; fill:#262626">62%</text>
+                      <text x="60" y="64" text-anchor="middle" style="font-size:8px; fill:#5d5d5d">충전량</text>
+                    </svg>
+                    <div style="text-align:center; font-size:10.5px; color:#5d5d5d; margin-top:-6px">
+                      <span style="background:#ffd8d7; color:#da3944; border:1px solid #e1e1e1; border-radius:99px;
+                                   padding:1px 8px; font-weight:600">이상</span>
+                      &nbsp;M05 CV06
+                      <div style="margin-top:4px; color:#262626">충전 중 ↑</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:13px 0 5px">모듈별 상태 · 16개 &nbsp;·&nbsp; 눌러서 아래 차트를 바꾼다 · 색은 api 판정</div>
+                <div class="tiles">
+                  <div class="tile">M01 · 정상</div><div class="tile">M02 · 정상</div><div class="tile">M03 · 정상</div><div class="tile">M04 · 정상</div>
+                  <div class="tile flag-alert sel">M05 · 이상</div><div class="tile">M06 · 정상</div><div class="tile">M07 · 정상</div><div class="tile">M08 · 정상</div>
+                  <div class="tile">M09 · 정상</div><div class="tile">M10 · 정상</div><div class="tile">M11 · 정상</div><div class="tile">M12 · 정상</div>
+                  <div class="tile">M13 · 정상</div><div class="tile">M14 · 정상</div><div class="tile">M15 · 정상</div><div class="tile">M16 · 정상</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">
+                  <div class="chartcard">
+                    <div style="display:flex; justify-content:space-between; align-items:center">
+                      <div class="cap">M05 셀 전압 <b style="color:#262626">11채널</b></div>
+                      <div class="toggle"><i></i>편차 보기</div>
+                    </div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <defs><path id="cvB" d="M6,84 C70,79 110,73 160,64 C215,55 265,47 320,38 C355,32 380,28 394,26"/></defs>
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <use href="#cvB" class="ch" y="-14"/><use href="#cvB" class="ch" y="-11"/>
+                      <use href="#cvB" class="ch" y="-8"/><use href="#cvB" class="ch" y="-5"/>
+                      <use href="#cvB" class="ch" y="-2"/><use href="#cvB" class="ch" y="1"/>
+                      <use href="#cvB" class="ch" y="4"/><use href="#cvB" class="ch" y="7"/>
+                      <use href="#cvB" class="ch" y="10"/><use href="#cvB" class="ch" y="13"/>
+                      <path class="hi" d="M6,86 C70,81 110,75 160,66 C200,60 220,60 240,74 C258,86 272,58 300,44 C340,34 372,30 394,28"/>
+                      <text x="6" y="100">14:00</text><text x="360" y="100">14:10</text>
+                      <text x="360" y="20" style="fill:#da3944">CV06</text>
+                    </svg>
+                  </div>
+                  <div class="chartcard">
+                    <div class="cap">M05 모듈 온도 <b style="color:#262626">T01 · T02</b></div>
+                    <div style="height:19px"></div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <path class="t1" d="M6,74 C70,71 120,68 180,60 C240,52 300,46 394,40"/>
+                      <path class="t2" d="M6,80 C70,78 120,76 180,70 C240,64 300,60 394,55"/>
+                      <text x="6" y="100">14:00</text><text x="360" y="100">14:10</text>
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:14px 0 5px">최근 알림</div>
+                <div class="card" style="padding:6px 12px">
+                  <div class="row"><span class="pill alert">이상</span><b>PACK 1002</b>
+                    <span>M05 CV06 전압 편차 확대</span><span class="when">측정 14:06:12 · seq 1,204</span></div>
+                  <div class="row"><span class="pill warn">주의</span><b>PACK 1004</b>
+                    <span>M11 온도 상승 추세</span><span class="when">측정 14:05:41 · seq 1,197</span></div>
+                </div>
+
+                <div class="foot">측정 battery.pack.measurement · 판정 battery.pack.verdict 구독. 판정은 api 의 모델 joint-ae v2 가 낸 것이다</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>7e7178f — 회색 레일 / 흰 본문. 팩 버튼이 한 줄에 하나, 상태를 라벨에 달고 선다</figcaption>
+    </figure>
+
+
+    <div class="gal-head"><h3>같은 판이 상황에 따라 내놓는 화면들</h3><span>03 · 6컷</span></div>
+    <p class="gal-note">배치는 02와 뼈대가 같지만, 상태를 <b>말과 색으로 드러내는 자리</b>가 늘었다.
+    팩 버튼 하나에 판정과 충전 진행이 함께 실리고, 도넛 꼬리는 만충에 닿으면 방향 대신 도착을 알린다.</p>
+
+    <div class="gallery wide">
+
+      <div class="shot">
+        <div class="lbl"><b>측정 수신 전</b><span>레일은 살아 있다</span></div>
+        <div class="body"><div class="app fit">
+          <div style="display:grid; grid-template-columns:1fr 2.4fr; gap:10px">
+            <div style="background:#f7f7f7; border-right:1px solid #e1e1e1; padding:11px 10px">
+              <div class="cap" style="margin-bottom:5px">파이프라인 수신 현황</div>
+              <div class="stat">
+                <div><div style="font-size:10px; color:#5d5d5d">측정</div><div class="n">0</div>
+                  <div style="font-size:10px; color:#a3a3a3">수신 전</div></div>
+                <div><div style="font-size:10px; color:#5d5d5d">판정</div><div class="n">0</div>
+                  <div style="font-size:10px; color:#a3a3a3">수신 전</div></div>
+              </div>
+            </div>
+            <div style="padding:11px 6px">
+              <div class="hdr" style="margin-bottom:9px"><h1 style="font-size:13px">배터리팩 품질검사 모니터링</h1>
+                <div class="meta">Kafka 수신 대기 중</div></div>
+              <div class="info">아직 수신한 측정이 없습니다. sensor generator 를 실행하면 몇 초 안에 화면이 채워집니다.</div>
+              <div class="code" style="margin-top:7px">docker compose exec dev python sensor_generator.py --limit 100</div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">02와 달리 빈 화면에서도 레일이 그려진다. 수신 카운터가 0으로 살아 있어야 ‘안 오는 중’ 과 ‘죽은 중’ 을 구분할 수 있다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>팩 목록 · 상태 6종</b><span>라벨 + 틴트 + 모서리 선</span></div>
+        <div class="body"><div class="app fit">
+          <div class="btn sel charging">PACK 1000 · 정상</div>
+          <div class="btn charging">PACK 1001 · 정상</div>
+          <div class="btn alert">PACK 1002 · 이상</div>
+          <div class="btn warn">PACK 1004 · 주의</div>
+          <div class="btn">PACK 1003 · 판정 전</div>
+          <div class="btn" style="margin-bottom:0">PACK 1006 · 대기</div>
+        </div></div>
+        <div class="note">세 축이 겹쳐 있다 — <b>채움</b>(선택, 파랑), <b>틴트</b>(판정, 주의·이상만),
+        <b>왼쪽 모서리 선</b>(지금 충전 중). 서로 다른 축이라 한 버튼에 셋이 다 있어도 읽힌다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>도넛 · 충전 완료</b><span>usoc ≥ 100</span></div>
+        <div class="body"><div class="app fit"><div class="chartcard" style="display:flex; flex-direction:column; align-items:center">
+          <svg class="chart" viewBox="0 0 120 92" style="max-width:140px">
+            <circle cx="60" cy="52" r="30" fill="none" stroke="#e1e1e1" stroke-width="15"/>
+            <circle cx="60" cy="52" r="30" fill="none" stroke="#2a72e5" stroke-width="15"
+                    stroke-dasharray="188.5 188.5" transform="rotate(-90 60 52)"/>
+            <text x="60" y="50" text-anchor="middle" style="font-size:17px; font-weight:700; fill:#262626">100%</text>
+            <text x="60" y="64" text-anchor="middle" style="font-size:8px; fill:#5d5d5d">충전량</text>
+          </svg>
+          <div style="text-align:center; font-size:10.5px; color:#5d5d5d; margin-top:-6px">
+            <span style="background:#bbecd7; color:#058765; border:1px solid #e1e1e1; border-radius:99px;
+                         padding:1px 8px; font-weight:600">정상</span>&nbsp;지목 없음
+            <div style="margin-top:4px; color:#262626">충전 완료</div>
+          </div>
+        </div></div></div>
+        <div class="note">100%에 멈춰 선 뒤에도 <span class="mono">↑</span> 를 띄우면 진행이 멎은 것처럼 읽혀서, 도착은 도착이라고 쓴다.
+        조건을 충전 구간 안에 둔 이유는 방전이 100%에서 <b>시작</b>하기 때문이다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>모듈 타일 · 지목 없음</b><span>정상 팩</span></div>
+        <div class="body"><div class="app fit">
+          <div class="tiles four">
+            <div class="tile sel">M01 · 정상</div><div class="tile">M02 · 정상</div>
+            <div class="tile">M03 · 정상</div><div class="tile">M04 · 정상</div>
+            <div class="tile">M05 · 정상</div><div class="tile">M06 · 정상</div>
+            <div class="tile">M07 · 정상</div><div class="tile">M08 · 정상</div>
+          </div>
+        </div></div>
+        <div class="note">여기서 ‘정상’ 은 <b>그 모듈이 원인으로 지목되지 않았다</b>는 뜻이다.
+        모델은 모듈을 하나씩 판정하지 않고 팩 하나를 판정한 뒤 원인 모듈 하나를 짚는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>모듈 타일 · 지목 있음</b><span>hover 확대</span></div>
+        <div class="body"><div class="app fit">
+          <div class="tiles four">
+            <div class="tile">M01 · 정상</div><div class="tile">M02 · 정상</div>
+            <div class="tile">M03 · 정상</div><div class="tile">M04 · 정상</div>
+            <div class="tile flag-alert sel" style="transform:scale(1.09)">M05 · 이상</div>
+            <div class="tile">M06 · 정상</div><div class="tile">M07 · 정상</div><div class="tile">M08 · 정상</div>
+          </div>
+        </div></div>
+        <div class="note">커서를 올리면 <span class="mono">transform:scale(1.09)</span> 로 커진다.
+        폭이나 패딩이 아니라 transform 이라 격자가 그대로 있고 커진 타일만 이웃 위로 덮인다.
+        움직임을 줄이도록 설정한 사용자에게는 확대하지 않는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>수신 현황</b><span>레일 위 큰 숫자 둘</span></div>
+        <div class="body"><div class="app fit" style="background:#f7f7f7; padding:12px; border-radius:8px">
+          <div class="cap" style="margin-bottom:6px">파이프라인 수신 현황</div>
+          <div class="stat">
+            <div><div style="font-size:11px; color:#5d5d5d">측정</div><div class="n">1,842</div>
+              <div style="font-size:10px; color:#a3a3a3">3초 전</div></div>
+            <div><div style="font-size:11px; color:#5d5d5d">판정</div><div class="n">612</div>
+              <div style="font-size:10px; color:#a3a3a3">4초 전</div></div>
+          </div>
+          <div style="font-size:10.5px; color:#5d5d5d; margin-top:7px">이상 4 · 주의 7 · 정상 601 · 유실 0 · 중복 0</div>
+        </div></div>
+        <div class="note">흰 카드를 벗겼다 — 레일 위에서는 표면을 겹치지 않고 선으로 끊는다.
+        두 수가 벌어지는 것이 파이프라인이 새고 있다는 첫 신호라 나란히 크게 뒀다.</div>
+      </div>
+
+    </div>
+
+    <ul class="changes">
+      <li><span class="tag">표면</span><span>본문 흰색 + 왼쪽 레일 회색, 레일 안은 구분선(<span class="mono">.rule</span>)으로 네 구간을 끊는다
+        <span class="why">색을 새로 만들지 않고 이미 있던 두 표면의 자리만 바꿨다</span></span></li>
+      <li><span class="tag">팩 목록</span><span>충전/방전 세그먼트 삭제 → 충전만. 1열 버튼에 <b>PACK 1002 · 이상</b> 처럼 상태를 붙였다
+        <span class="why">상태 글자를 <span class="mono">::after</span> 로 붙였더니 버튼 밖으로 삐져나와, 라벨 안으로 넣고 <span class="mono">width="stretch"</span> 를 줬다</span></span></li>
+      <li><span class="tag">색 규칙</span><span>주의·이상만 틴트, 정상·판정 전은 중립. 지금 충전 중인 팩은 왼쪽 모서리에 파란 선
+        <span class="why">전부 칠하면 목록이 알록달록해져 정작 빨간 줄이 안 띈다</span></span></li>
+      <li><span class="tag">모듈 타일</span><span>라벨이 <span class="mono">M05 · 이상</span> 두 마디로. 커서를 올리면 <span class="mono">transform:scale(1.09)</span> 로 커진다
+        <span class="why">폭·패딩이 아니라 transform이라 옆 타일 15개가 밀리지 않는다</span></span></li>
+      <li><span class="tag">수신 현황</span><span>흰 카드 → 레일 위 큰 숫자 둘
+        <span class="why">측정·판정 두 수가 벌어지는 것이 파이프라인이 새는 첫 신호라 나란히 크게 뒀다</span></span></li>
+      <li><span class="tag">도넛</span><span>꼬리에서 <span class="mono">seq</span> 를 빼고, 만충에 닿으면 <b>충전 중 ↑ → 충전 완료</b> 로 바꾼다
+        <span class="why">화살표는 ‘아직 가는 중’ 이라는 뜻이라, 100%에 멈춘 뒤에도 ↑ 를 띄우면 진행이 멎은 것처럼 읽힌다</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 04 ================= -->
+<section class="stage">
+  <div class="stage-head">
+    <div class="num">04</div>
+    <div>
+      <h2>지나간 것을 남기고, 터미널을 화면으로 들이다</h2>
+      <div class="meta"><span class="sha">2c2e7ea</span><span>2026-08-27</span><span>app.py 1,516줄</span>
+        <span>+568</span></div>
+      <p class="lede">팩 단위 모델로 갈아 끼우면서 화면이 답해야 할 질문이 바뀌었다.
+      ‘언제 튀었나’ 가 아니라 <b>‘어느 팩이 무엇 때문에 불합격인가’</b> 다.
+      그래서 최근 알림이 <b>검사 결과판</b>으로 바뀌고(정상 팩도 적는다), 판정 카드의 큰 제목 자리에는
+      상태 대신 <b>불량 유형</b>이 들어간다. 동시에 가장 성가시던 것도 고쳤다 —
+      다시 재생하려면 매번 터미널에서 Kafka를 비우고 generator를 돌려야 했는데, 그 셋을 헤더 오른쪽 버튼 세 개로 옮겼다.</p>
+    </div>
+  </div>
+
+  <div class="stage-body">
+    <figure>
+      <div class="frame">
+        <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="url">localhost:8501 — 배터리팩 품질검사 모니터링</span></div>
+        <div class="scroller">
+          <div class="app" style="background:#fff">
+            <div style="display:grid; grid-template-columns:1fr 3.6fr; gap:10px">
+
+              <!-- 레일 -->
+              <div style="background:#f7f7f7; border-right:1px solid #e1e1e1; padding:18px 13px 22px">
+                <div style="font-size:11px; color:#5d5d5d">2026년 8월 27일 (수)</div>
+                <div style="font-size:11px; color:#5d5d5d; margin-top:6px">현재 시각</div>
+                <div style="font-size:26px; font-weight:800; line-height:1.3">14:06</div>
+                <div style="font-size:11px; color:#5d5d5d">라인 가동 07:00 –</div>
+                <div class="rule"></div>
+
+                <div class="cap" style="margin-bottom:6px">검사 대상 팩</div>
+                <div class="packbox" style="max-height:214px">
+                  <div class="btn charging">PACK 9001 · 정상</div>
+                  <div class="btn alert">PACK 9005 · 셀이상</div>
+                  <div class="btn sel">PACK 9008 · 용접?</div>
+                  <div class="btn warn">PACK 9003 · 센서?</div>
+                  <div class="btn">PACK 9004 · 판정 전</div>
+                  <div class="btn">PACK 9006 · 정상</div>
+                  <div class="btn">PACK 9007 · 대기</div>
+                </div>
+
+                <div class="rule"></div>
+                <div class="cap" style="margin-bottom:4px">차트 표시 구간</div>
+                <div class="select">10분</div>
+
+                <div class="rule"></div>
+                <div class="cap" style="margin-bottom:6px">파이프라인 수신 현황</div>
+                <div class="stat">
+                  <div><div style="font-size:11px; color:#5d5d5d">측정</div>
+                    <div class="n">4,318</div><div style="font-size:10px; color:#a3a3a3">1초 전</div></div>
+                  <div><div style="font-size:11px; color:#5d5d5d">판정</div>
+                    <div class="n">4,301</div><div style="font-size:10px; color:#a3a3a3">1초 전</div></div>
+                </div>
+                <div style="font-size:10.5px; color:#5d5d5d; margin-top:7px">이상 38 · 주의 122 · 정상 4,141 · 유실 0 · 중복 0</div>
+              </div>
+
+              <!-- 본문 -->
+              <div style="padding:18px 18px 20px 7px">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:13px">
+                  <div>
+                    <h1>배터리팩 품질검사 모니터링</h1>
+                    <div style="font-size:11px; color:#5d5d5d">PACK 9008 · 충전 · Kafka 실시간 수신 중</div>
+                  </div>
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; width:190px; flex:none">
+                    <div class="ctlbtn primary">정지</div>
+                    <div class="ctlbtn">초기화</div>
+                  </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:14px">
+                  <div class="verdict" style="background:#ffd9c8; color:#262626">
+                    <div class="tag">● 판정 · pack-ae v3</div>
+                    <h2>용접불량 (확정 전)</h2>
+                    <div class="sub">M02 구간 저항 상승 · seq 4,301</div>
+                    <div class="nums">
+                      <div><div class="k">문제 모듈</div><div class="v">M02</div></div>
+                      <div><div class="k">문제 셀</div><div class="v">–</div></div>
+                      <div><div class="k">판정</div><div class="v">확정 전</div></div>
+                    </div>
+                    <div class="past">
+                      <span>이 구간에 이상 <b>2건</b> — 최근 M14 센서불량 · 14:02:11</span>
+                      <span class="hint">모듈 타일의 표시를 눌러 차트에서 확인</span>
+                    </div>
+                  </div>
+                  <div class="chartcard" style="display:flex; flex-direction:column; align-items:center; justify-content:center">
+                    <svg class="chart" viewBox="0 0 120 92" style="max-width:150px">
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#e1e1e1" stroke-width="15"/>
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#2a72e5" stroke-width="15"
+                              stroke-dasharray="156 188.5" transform="rotate(-90 60 52)"/>
+                      <text x="60" y="50" text-anchor="middle" style="font-size:17px; font-weight:700; fill:#262626">83%</text>
+                      <text x="60" y="64" text-anchor="middle" style="font-size:8px; fill:#5d5d5d">충전량</text>
+                    </svg>
+                    <div style="text-align:center; font-size:10.5px; color:#5d5d5d; margin-top:-6px">
+                      <span style="background:#ffd9c8; color:#262626; border:1px solid #e1e1e1; border-radius:99px;
+                                   padding:1px 8px; font-weight:600">주의</span>
+                      &nbsp;M02
+                      <div style="margin-top:4px; color:#262626">충전 중 ↑</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:13px 0 5px">모듈별 상태 · 16개 &nbsp;·&nbsp; 눌러서 아래 차트를 바꾼다 · 색은 api 판정</div>
+                <div class="tiles">
+                  <div class="tile">M01 · 정상</div><div class="tile flag-warn sel">M02 · 주의</div><div class="tile">M03 · 정상</div><div class="tile">M04 · 정상</div>
+                  <div class="tile">M05 · 정상</div><div class="tile">M06 · 정상</div><div class="tile">M07 · 정상</div><div class="tile">M08 · 정상</div>
+                  <div class="tile">M09 · 정상</div><div class="tile">M10 · 정상</div><div class="tile">M11 · 정상</div><div class="tile">M12 · 정상</div>
+                  <div class="tile">M13 · 정상</div><div class="tile past">M14 · 이력</div><div class="tile">M15 · 정상</div><div class="tile">M16 · 정상</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">
+                  <div class="chartcard">
+                    <div style="display:flex; justify-content:space-between; align-items:center">
+                      <div class="cap">M02 셀 전압 <b style="color:#262626">11채널</b></div>
+                      <div class="toggle"><i></i>편차 보기</div>
+                    </div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <defs><path id="cvC" d="M6,84 C70,79 110,73 160,64 C215,55 265,47 320,38 C355,32 380,28 394,26"/></defs>
+                      <rect class="band" x="150" y="6" width="62" height="84"/>
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <use href="#cvC" class="ch" y="-14"/><use href="#cvC" class="ch" y="-11"/>
+                      <use href="#cvC" class="ch" y="-8"/><use href="#cvC" class="ch" y="-5"/>
+                      <use href="#cvC" class="ch" y="-2"/><use href="#cvC" class="ch" y="1"/>
+                      <use href="#cvC" class="ch" y="4"/><use href="#cvC" class="ch" y="7"/>
+                      <use href="#cvC" class="ch" y="10"/><use href="#cvC" class="ch" y="13"/>
+                      <path class="hi" d="M6,86 C70,81 110,75 160,66 C185,62 195,70 212,72 C240,72 280,54 320,42 C355,34 378,30 394,28"/>
+                      <text x="6" y="100">14:00</text><text x="152" y="100" style="fill:#da3944">이상 구간</text><text x="360" y="100">14:10</text>
+                    </svg>
+                  </div>
+                  <div class="chartcard">
+                    <div class="cap">M02 모듈 온도 <b style="color:#262626">T01 · T02</b></div>
+                    <div style="height:19px"></div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <rect class="band" x="150" y="6" width="62" height="84"/>
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <path class="t1" d="M6,74 C70,71 120,68 180,58 C240,50 300,45 394,40"/>
+                      <path class="t2" d="M6,80 C70,78 120,76 180,70 C240,64 300,60 394,55"/>
+                      <text x="6" y="100">14:00</text><text x="360" y="100">14:10</text>
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:14px 0 5px">검사 결과 · 팩별 판정과 불량 요인</div>
+                <div class="card" style="padding:6px 12px">
+                  <div class="row"><span class="pill alert">이상</span><b style="min-width:76px">PACK 9005</b>
+                    <span style="min-width:92px; font-weight:600">셀 단위 이상</span><span style="min-width:66px; color:#5d5d5d">M05 CV06</span>
+                    <span class="when">확정 · 측정 14:03:55</span></div>
+                  <div class="row dim here"><span class="pill warn">주의</span><b style="min-width:76px">PACK 9008</b>
+                    <span style="min-width:92px; font-weight:600">용접불량</span><span style="min-width:66px; color:#5d5d5d">M02</span>
+                    <span class="when">확정 전 · 측정 14:06:05</span></div>
+                  <div class="row dim"><span class="pill warn">주의</span><b style="min-width:76px">PACK 9003</b>
+                    <span style="min-width:92px; font-weight:600">센서불량</span><span style="min-width:66px; color:#5d5d5d">M14</span>
+                    <span class="when">확정 전 · 측정 14:05:12</span></div>
+                  <div class="row"><span class="pill ok">정상</span><b style="min-width:76px">PACK 9001</b>
+                    <span style="min-width:92px; font-weight:600">–</span><span style="min-width:66px; color:#5d5d5d">–</span>
+                    <span class="when">확정 · 측정 14:06:01</span></div>
+                  <div class="row"><span class="pill ok">정상</span><b style="min-width:76px">PACK 9006</b>
+                    <span style="min-width:92px; font-weight:600">–</span><span style="min-width:66px; color:#5d5d5d">–</span>
+                    <span class="when">확정 · 측정 14:05:48</span></div>
+                  <div style="font-size:10px; color:#5d5d5d; margin-top:7px">검사 5팩 중 불합격 1팩 &nbsp;·&nbsp; 판정은 팩(충전 세션) 단위이며 측정이 쌓일수록 갱신된다</div>
+                </div>
+
+                <div class="foot">측정 battery.pack.measurement · 판정 battery.pack.verdict 구독. 판정은 api 의 모델 pack-ae v3 이 낸 것이다 (점수 없이 판정만 온다)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>2c2e7ea — 오른쪽 위 조작 버튼, 두 층으로 나뉜 판정 카드, 이력 띠, 검사 결과판</figcaption>
+    </figure>
+
+
+    <div class="gal-head"><h3>같은 판이 상황에 따라 내놓는 화면들</h3><span>04 · 10컷</span></div>
+    <p class="gal-note">이 판에서 화면이 처음으로 <b>되받아친다</b> — 누르면 api 가 움직이고, 그 결과가 화면에 뜬다.
+    그리고 처음으로 <b>지나간 것</b>을 기억한다.</p>
+
+    <div class="gallery wide">
+
+      <div class="shot">
+        <div class="lbl"><b>측정 수신 전</b><span>버튼은 그대로 있다</span></div>
+        <div class="body"><div class="app fit">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px">
+            <div><h1 style="font-size:13px">배터리팩 품질검사 모니터링</h1>
+              <div style="font-size:11px; color:#5d5d5d">Kafka 수신 대기 중</div></div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px; width:150px; flex:none">
+              <div class="ctlbtn primary">재생</div><div class="ctlbtn">초기화</div></div>
+          </div>
+          <div class="info">아직 수신한 측정이 없습니다. 오른쪽 위 <b>재생</b> 을 누르면 데모 팩 9개가 흐르기 시작합니다.</div>
+        </div></div>
+        <div class="note">빈 화면이 자기 제목을 따로 그리면 거기엔 버튼이 없다 — 버튼이 가장 필요한 순간이 바로 이때라
+        빈 화면도 같은 헤더를 쓴다. 안내 문구도 터미널 명령에서 <b>재생</b> 으로 바뀌었다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>api 에 닿지 않을 때</b><span>requests 예외</span></div>
+        <div class="body"><div class="app fit">
+          <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px">
+            <div><h1 style="font-size:13px">배터리팩 품질검사 모니터링</h1>
+              <div style="font-size:11px; color:#5d5d5d">PACK 9008 · 충전 · Kafka 실시간 수신 중</div></div>
+            <div style="width:170px; flex:none; text-align:right"><span class="empty">api 에 닿지 않아 조작할 수 없습니다</span></div>
+          </div>
+        </div></div>
+        <div class="note">버튼을 흐리게 두는 대신 아예 지운다. 눌러도 아무 일이 안 일어나는 버튼을 두는 것보다 낫다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>재생 중 / 멈춰 있을 때</b><span>GET /replay</span></div>
+        <div class="body"><div class="app fit">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px">
+            <div>
+              <div class="cap" style="margin-bottom:5px">running = true</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px">
+                <div class="ctlbtn primary">정지</div><div class="ctlbtn">초기화</div></div>
+            </div>
+            <div>
+              <div class="cap" style="margin-bottom:5px">running = false</div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:5px">
+                <div class="ctlbtn primary">재생</div><div class="ctlbtn">초기화</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">버튼 하나가 재생과 정지를 겸한다. 그래서 그리기 전에 api 에 먼저 지금 도는지 묻는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>조작 결과 알림</b><span>session_state 경유</span></div>
+        <div class="body"><div class="app fit">
+          <div class="okbox" style="margin-bottom:7px"><span style="color:#058765; font-weight:700">✓</span>
+            <span>초기화 완료 — Kafka 기록과 모델 상태를 비웠습니다</span></div>
+          <div class="okbox" style="margin-bottom:7px"><span style="color:#058765; font-weight:700">✓</span>
+            <span>재생을 시작했습니다 — 잠시 뒤 화면이 채워집니다</span></div>
+          <div class="errbox"><span style="font-weight:700">✕</span>
+            <span>실패: HTTPConnectionPool(host='api', port=3000) …</span></div>
+        </div></div>
+        <div class="note">알림을 그 자리에서 그리면 뒤이은 <span class="mono">st.rerun()</span> 이 지워 버린다.
+        그래서 결과를 <span class="mono">session_state</span> 에 넣어 다음 그리기까지 살려 보낸다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>판정 카드 · 셀 단위 이상</b><span>제목 = 불량 유형</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#ffd8d7; color:#da3944">
+            <div class="tag">● 판정 · pack-ae v3</div>
+            <h2>셀 단위 이상</h2>
+            <div class="sub">M05 CV06 전압 편차 확대 · seq 4,118</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+              <div><div class="k">문제 셀</div><div class="v">CV06</div></div>
+              <div><div class="k">판정</div><div class="v">확정</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">팩 단위 모델의 산출물이 ‘이상인가’ 가 아니라 ‘무엇이 잘못됐는가’ 라서,
+        화면에서 가장 큰 자리에 그것을 둔다. 예전 제목(‘이상 감지’)은 이제 쓰이지 않는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>판정 카드 · 미확정</b><span>warmup = true</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#ffd9c8; color:#262626">
+            <div class="tag">● 판정 · pack-ae v3</div>
+            <h2>용접불량 (확정 전)</h2>
+            <div class="sub">M02 구간 저항 상승 · seq 4,301</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M02</div></div>
+              <div><div class="k">문제 셀</div><div class="v">–</div></div>
+              <div><div class="k">판정</div><div class="v">확정 전</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">SOC 칸이 덜 차 판정이 실제로 뒤집힌다(용접불량 M02 → 센서불량 M14).
+        확정된 것처럼 보이면 안 되므로 제목에 그렇게 적는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>판정 카드 · 이상 고정</b><span>held_anomaly</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#ffd8d7; color:#da3944">
+            <div class="tag">● 판정 · pack-ae v3</div>
+            <h2>이상 발생</h2>
+            <div class="sub">M05 CV06 · 14:02:11 이상 — 지금 이 행은 정상 (임계 내) · seq 4,140</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+              <div><div class="k">문제 셀</div><div class="v">CV06</div></div>
+              <div><div class="k">판정</div><div class="v">확정</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">지금 판정이 정상이어도 최근 이상은 잠시 붙들어 카드를 붉게 고정한다.
+        <b>지키는 선은 하나</b> — 큰 제목은 사건을 말하고, 바로 아래 줄이 이 행의 판정을 그대로 적는다.
+        제목만 붉히고 현재 판정을 감추면 화면이 api 와 다른 말을 하게 된다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>모듈 타일 · 이력</b><span>왼쪽 세로 띠</span></div>
+        <div class="body"><div class="app fit">
+          <div class="tiles four">
+            <div class="tile">M01 · 정상</div><div class="tile flag-warn sel">M02 · 주의</div>
+            <div class="tile">M03 · 정상</div><div class="tile">M04 · 정상</div>
+            <div class="tile past">M05 · 이력</div><div class="tile">M06 · 정상</div>
+            <div class="tile">M07 · 정상</div><div class="tile past">M14 · 이력</div>
+          </div>
+        </div></div>
+        <div class="note">이상은 몇 초 만에 지나가는데 그리드는 마지막 판정만 반영해서,
+        조금만 늦게 보면 16칸이 전부 되돌아가 있었다. 띠가 남으면 ‘저기 뭔가 있었다 → 눌러서 차트 확인’ 이 된다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>차트 · 판정 띠와 마커</b><span>이상 빨강 · 주의 주황</span></div>
+        <div class="body"><div class="app fit"><div class="chartcard">
+          <div class="cap" style="margin-bottom:3px">M05 셀 전압 <b style="color:#262626">11채널</b></div>
+          <svg class="chart" viewBox="0 0 400 104">
+            <defs><path id="cvG" d="M6,84 C70,79 110,73 160,64 C215,55 265,47 320,38 C355,32 380,28 394,26"/></defs>
+            <rect class="band warn" x="96" y="10" width="40" height="80"/>
+            <rect class="band" x="196" y="10" width="30" height="80"/>
+            <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+            <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+            <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+            <use href="#cvG" class="ch" y="-14"/><use href="#cvG" class="ch" y="-10"/>
+            <use href="#cvG" class="ch" y="-6"/><use href="#cvG" class="ch" y="-2"/>
+            <use href="#cvG" class="ch" y="2"/><use href="#cvG" class="ch" y="6"/>
+            <use href="#cvG" class="ch" y="10"/><use href="#cvG" class="ch" y="14"/>
+            <path class="hi" d="M6,86 C70,81 110,75 160,66 C185,62 196,74 211,82 C226,86 240,60 280,50 C330,40 372,30 394,28"/>
+            <path d="M110,4 L122,4 L116,13 Z" fill="#f08a3c"/>
+            <path d="M205,4 L217,4 L211,13 Z" fill="#da3944"/>
+            <text x="6" y="100">14:00</text><text x="356" y="100">14:10</text>
+          </svg>
+        </div></div></div>
+        <div class="note">띠는 옅게(22%) 깐다 — 진하면 정작 봐야 할 딥이 묻힌다.
+        위쪽 삼각 마커는 창 길이와 무관하게 같은 크기라, 30초짜리 버스트도 ‘전체’ 창에서 찾을 수 있다.
+        띠는 <b>지목된 모듈의 차트에만</b> 그린다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>검사 결과판 · 아직 없음</b><span>results 비어 있음</span></div>
+        <div class="body"><div class="app fit">
+          <div class="cap" style="margin-bottom:5px">검사 결과 · 팩별 판정과 불량 요인</div>
+          <div class="card"><span class="empty">아직 판정된 팩이 없습니다 — 팩 하나에 측정 100건이 쌓이고
+            SOC 구간이 어느 정도 차야 첫 판정이 나옵니다</span></div>
+        </div></div>
+        <div class="note">‘알림 없음’ 과 달리 왜 비어 있는지까지 적는다. 재생 직후 몇십 초는 정상적으로 비어 있는 시간이다.</div>
+      </div>
+
+    </div>
+
+    <ul class="changes">
+      <li><span class="tag">조작</span><span>헤더 오른쪽에 <b>재생 / 정지</b>(한 버튼이 겸한다)와 <b>초기화</b>
+        <span class="why">초기화는 세 겹을 비운다 — api 모델의 팩별 누적 버퍼, Kafka 토픽 기록, 그리고 다른 프로세스라 api가 못 닿는 화면 버퍼</span></span></li>
+      <li><span class="tag">판정 카드</span><span>제목이 상태 → <b>불량 유형</b>(용접불량 · 셀 단위 이상 · 센서불량). 셋째 숫자 칸은 ‘차트 구간’ 대신 <b>확정 전 / 확정</b>
+        <span class="why">구간 길이는 왼쪽 레일에서 이미 고른 값이지만, 이 판정을 믿어도 되는가는 그 자리에서만 알 수 있다</span></span></li>
+      <li><span class="tag">판정 카드</span><span>아래층 ‘이 구간에 있었음’ 추가. 최근 이상은 정상 판정이 와도 잠시 붙들어 카드를 붉게 고정한다
+        <span class="why">위층은 ‘지금’ 만 말한다 — 3초 뒤 정상 판정이 카드를 통째로 되돌려 놓아, 조금만 늦게 보면 아무 일도 없었던 것처럼 보였다</span></span></li>
+      <li><span class="tag">모듈 타일</span><span><span class="mono">M14 · 이력</span> + 왼쪽 세로 띠로 지나간 이상을 남긴다
+        <span class="why">채움(지금)과 띠(있었음)는 다른 축이라 겹쳐도 읽힌다</span></span></li>
+      <li><span class="tag">차트</span><span>이상·주의 구간을 붉은 띠로 겹쳐 그린다</span></li>
+      <li><span class="tag">아래</span><span>최근 알림 → <b>검사 결과판</b>. 정상 팩도 함께 적고, 확정 전 줄은 통째로 흐리게
+        <span class="why">검사표는 통과한 것도 적어야 표다. 색은 이미 판정이 쓰고 있어서 미확정은 밝기로 말한다</span></span></li>
+      <li><span class="tag">빈 화면</span><span>측정이 하나도 없을 때도 같은 헤더를 그린다
+        <span class="why">버튼이 가장 필요한 순간이 바로 그때다</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 05 ================= -->
+<section class="stage">
+  <div class="stage-head">
+    <div class="num">05</div>
+    <div>
+      <h2>화면이 쓰는 말을 다시 골랐다</h2>
+      <div class="meta"><span class="sha">working tree</span><span>아직 커밋 전</span><span>app.py 1,547줄</span>
+        <span>+42 −11</span></div>
+      <p class="lede">배치는 그대로다. 바뀐 것은 <b>말</b>이다.
+      ‘확정 / 확정 전’ 은 절차의 상태라 무엇을 찾았는지 말해 주지 않는데, 화면을 보는 사람이 알고 싶은 것은
+      <b>이 팩에서 무엇이 나왔나</b> 다. 그래서 <span class="mono">confirm_label()</span> 한 곳에서
+      <b>주의 / 이상치 탐지 / 이상 없음</b> 세 마디를 정하고, 판정 카드와 검사 결과판이 같이 쓴다.
+      목록의 <span class="mono">용접?</span> 도 <span class="mono">용접 예상</span> 이 됐다 —
+      물음표는 ‘모르겠다’ 로 읽히는데, 실제로는 짚었고 다만 근거가 덜 찼을 뿐이라서다.</p>
+    </div>
+  </div>
+
+  <div class="stage-body">
+    <figure>
+      <div class="frame">
+        <div class="chrome"><i class="dot"></i><i class="dot"></i><i class="dot"></i>
+          <span class="url">localhost:8501 — 배터리팩 품질검사 모니터링</span></div>
+        <div class="scroller">
+          <div class="app" style="background:#fff">
+            <div style="display:grid; grid-template-columns:1fr 3.6fr; gap:10px">
+
+              <!-- 레일 -->
+              <div style="background:#f7f7f7; border-right:1px solid #e1e1e1; padding:18px 13px 22px">
+                <div style="font-size:11px; color:#5d5d5d">2026년 8월 29일 (토)</div>
+                <div style="font-size:11px; color:#5d5d5d; margin-top:6px">현재 시각</div>
+                <div style="font-size:26px; font-weight:800; line-height:1.3">14:06</div>
+                <div style="font-size:11px; color:#5d5d5d">라인 가동 07:00 –</div>
+                <div class="rule"></div>
+
+                <div class="cap" style="margin-bottom:6px">검사 대상 팩</div>
+                <div class="packbox" style="max-height:214px">
+                  <div class="btn charging">PACK 9001 · 정상</div>
+                  <div class="btn alert">PACK 9005 · 셀이상</div>
+                  <div class="btn sel">PACK 9008 · 용접 예상</div>
+                  <div class="btn warn">PACK 9003 · 센서 예상</div>
+                  <div class="btn">PACK 9004 · 판정 전</div>
+                  <div class="btn">PACK 9006 · 정상</div>
+                  <div class="btn">PACK 9007 · 대기</div>
+                </div>
+
+                <div class="rule"></div>
+                <div class="cap" style="margin-bottom:4px">차트 표시 구간</div>
+                <div class="select">10분</div>
+
+                <div class="rule"></div>
+                <div class="cap" style="margin-bottom:6px">파이프라인 수신 현황</div>
+                <div class="stat">
+                  <div><div style="font-size:11px; color:#5d5d5d">측정</div>
+                    <div class="n">4,318</div><div style="font-size:10px; color:#a3a3a3">1초 전</div></div>
+                  <div><div style="font-size:11px; color:#5d5d5d">판정</div>
+                    <div class="n">4,301</div><div style="font-size:10px; color:#a3a3a3">1초 전</div></div>
+                </div>
+                <div style="font-size:10.5px; color:#5d5d5d; margin-top:7px">이상 38 · 주의 122 · 정상 4,141 · 유실 0 · 중복 0</div>
+              </div>
+
+              <!-- 본문 -->
+              <div style="padding:18px 18px 20px 7px">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:13px">
+                  <div>
+                    <h1>배터리팩 품질검사 모니터링</h1>
+                    <div style="font-size:11px; color:#5d5d5d">PACK 9008 · 충전 · Kafka 실시간 수신 중</div>
+                  </div>
+                  <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; width:190px; flex:none">
+                    <div class="ctlbtn primary">정지</div>
+                    <div class="ctlbtn">초기화</div>
+                  </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:2fr 1fr; gap:14px">
+                  <div class="verdict" style="background:#ffd9c8; color:#262626">
+                    <div class="tag">● 판정 · pack-ae v3</div>
+                    <h2>용접불량 (주의)</h2>
+                    <div class="sub">M02 구간 저항 상승 · seq 4,301</div>
+                    <div class="nums">
+                      <div><div class="k">문제 모듈</div><div class="v">M02</div></div>
+                      <div><div class="k">문제 셀</div><div class="v">–</div></div>
+                      <div><div class="k">판정</div><div class="v">주의</div></div>
+                    </div>
+                    <div class="past">
+                      <span>이 구간에 이상 <b>2건</b> — 최근 M14 센서불량 · 14:02:11</span>
+                      <span class="hint">모듈 타일의 표시를 눌러 차트에서 확인</span>
+                    </div>
+                  </div>
+                  <div class="chartcard" style="display:flex; flex-direction:column; align-items:center; justify-content:center">
+                    <svg class="chart" viewBox="0 0 120 92" style="max-width:150px">
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#e1e1e1" stroke-width="15"/>
+                      <circle cx="60" cy="52" r="30" fill="none" stroke="#2a72e5" stroke-width="15"
+                              stroke-dasharray="156 188.5" transform="rotate(-90 60 52)"/>
+                      <text x="60" y="50" text-anchor="middle" style="font-size:17px; font-weight:700; fill:#262626">83%</text>
+                      <text x="60" y="64" text-anchor="middle" style="font-size:8px; fill:#5d5d5d">충전량</text>
+                    </svg>
+                    <div style="text-align:center; font-size:10.5px; color:#5d5d5d; margin-top:-6px">
+                      <span style="background:#ffd9c8; color:#262626; border:1px solid #e1e1e1; border-radius:99px;
+                                   padding:1px 8px; font-weight:600">주의</span>
+                      &nbsp;M02
+                      <div style="margin-top:4px; color:#262626">충전 중 ↑</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:13px 0 5px">모듈별 상태 · 16개 &nbsp;·&nbsp; 눌러서 아래 차트를 바꾼다 · 색은 api 판정</div>
+                <div class="tiles">
+                  <div class="tile">M01 · 정상</div><div class="tile flag-warn sel">M02 · 주의</div><div class="tile">M03 · 정상</div><div class="tile">M04 · 정상</div>
+                  <div class="tile">M05 · 정상</div><div class="tile">M06 · 정상</div><div class="tile">M07 · 정상</div><div class="tile">M08 · 정상</div>
+                  <div class="tile">M09 · 정상</div><div class="tile">M10 · 정상</div><div class="tile">M11 · 정상</div><div class="tile">M12 · 정상</div>
+                  <div class="tile">M13 · 정상</div><div class="tile past">M14 · 이력</div><div class="tile">M15 · 정상</div><div class="tile">M16 · 정상</div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px">
+                  <div class="chartcard">
+                    <div style="display:flex; justify-content:space-between; align-items:center">
+                      <div class="cap">M02 셀 전압 <b style="color:#262626">11채널</b></div>
+                      <div class="toggle"><i></i>편차 보기</div>
+                    </div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <defs><path id="cvD" d="M6,84 C70,79 110,73 160,64 C215,55 265,47 320,38 C355,32 380,28 394,26"/></defs>
+                      <rect class="band" x="150" y="6" width="62" height="84"/>
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <use href="#cvD" class="ch" y="-14"/><use href="#cvD" class="ch" y="-11"/>
+                      <use href="#cvD" class="ch" y="-8"/><use href="#cvD" class="ch" y="-5"/>
+                      <use href="#cvD" class="ch" y="-2"/><use href="#cvD" class="ch" y="1"/>
+                      <use href="#cvD" class="ch" y="4"/><use href="#cvD" class="ch" y="7"/>
+                      <use href="#cvD" class="ch" y="10"/><use href="#cvD" class="ch" y="13"/>
+                      <path class="hi" d="M6,86 C70,81 110,75 160,66 C185,62 195,70 212,72 C240,72 280,54 320,42 C355,34 378,30 394,28"/>
+                      <text x="6" y="100">14:00</text><text x="152" y="100" style="fill:#da3944">이상 구간</text><text x="360" y="100">14:10</text>
+                    </svg>
+                  </div>
+                  <div class="chartcard">
+                    <div class="cap">M02 모듈 온도 <b style="color:#262626">T01 · T02</b></div>
+                    <div style="height:19px"></div>
+                    <svg class="chart" viewBox="0 0 400 104">
+                      <rect class="band" x="150" y="6" width="62" height="84"/>
+                      <line class="grid" x1="6" y1="24" x2="394" y2="24"/>
+                      <line class="grid" x1="6" y1="56" x2="394" y2="56"/>
+                      <line class="grid" x1="6" y1="88" x2="394" y2="88"/>
+                      <path class="t1" d="M6,74 C70,71 120,68 180,58 C240,50 300,45 394,40"/>
+                      <path class="t2" d="M6,80 C70,78 120,76 180,70 C240,64 300,60 394,55"/>
+                      <text x="6" y="100">14:00</text><text x="360" y="100">14:10</text>
+                    </svg>
+                  </div>
+                </div>
+
+                <div class="cap" style="margin:14px 0 5px">검사 결과 · 팩별 판정과 불량 요인</div>
+                <div class="card" style="padding:6px 12px">
+                  <div class="row"><span class="pill alert">이상</span><b style="min-width:76px">PACK 9005</b>
+                    <span style="min-width:92px; font-weight:600">셀 단위 이상</span><span style="min-width:66px; color:#5d5d5d">M05 CV06</span>
+                    <span class="when">이상치 탐지 · 측정 14:03:55</span></div>
+                  <div class="row dim here"><span class="pill warn">주의</span><b style="min-width:76px">PACK 9008</b>
+                    <span style="min-width:92px; font-weight:600">용접불량</span><span style="min-width:66px; color:#5d5d5d">M02</span>
+                    <span class="when">주의 · 측정 14:06:05</span></div>
+                  <div class="row dim"><span class="pill warn">주의</span><b style="min-width:76px">PACK 9003</b>
+                    <span style="min-width:92px; font-weight:600">센서불량</span><span style="min-width:66px; color:#5d5d5d">M14</span>
+                    <span class="when">주의 · 측정 14:05:12</span></div>
+                  <div class="row"><span class="pill ok">정상</span><b style="min-width:76px">PACK 9001</b>
+                    <span style="min-width:92px; font-weight:600">–</span><span style="min-width:66px; color:#5d5d5d">–</span>
+                    <span class="when">이상 없음 · 측정 14:06:01</span></div>
+                  <div class="row"><span class="pill ok">정상</span><b style="min-width:76px">PACK 9006</b>
+                    <span style="min-width:92px; font-weight:600">–</span><span style="min-width:66px; color:#5d5d5d">–</span>
+                    <span class="when">이상 없음 · 측정 14:05:48</span></div>
+                  <div style="font-size:10px; color:#5d5d5d; margin-top:7px">검사 5팩 중 불합격 1팩 &nbsp;·&nbsp; 판정은 팩(충전 세션) 단위이며 측정이 쌓일수록 갱신된다</div>
+                </div>
+
+                <div class="foot">측정 battery.pack.measurement · 판정 battery.pack.verdict 구독. 판정은 api 의 모델 pack-ae v3 이 낸 것이다 (점수 없이 판정만 온다)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption>현재 작업본 — 배치는 04와 같고, 판정을 부르는 말이 바뀌었다</figcaption>
+    </figure>
+
+    <table class="wordtable">
+      <thead><tr><th>자리</th><th>04 까지</th><th>지금</th><th>바꾼 이유</th></tr></thead>
+      <tbody>
+        <tr><td>판정 카드 · 판정 칸</td><td class="before">확정 전 / 확정</td><td class="after">주의 / 이상치 탐지 / 이상 없음</td>
+            <td>절차 상태가 아니라 찾은 것을 말한다</td></tr>
+        <tr><td>판정 카드 · 제목 꼬리</td><td class="before">용접불량 (확정 전)</td><td class="after">용접불량 (주의)</td>
+            <td>짚은 것이 있을 때만 붙인다 — 정상 팩이 ‘이상 없음 (확정 전)’ 이 되던 것을 막는다</td></tr>
+        <tr><td>팩 목록 배지</td><td class="before">용접?</td><td class="after">용접 예상</td>
+            <td>물음표는 아무것도 못 짚은 것으로 읽힌다</td></tr>
+        <tr><td>검사 결과판</td><td class="before">확정 전 / 확정</td><td class="after">주의 / 이상치 탐지 / 이상 없음</td>
+            <td>카드와 결과판이 같은 함수를 쓴다 — 따로 만들면 한쪽만 고쳐진다</td></tr>
+      </tbody>
+    </table>
+
+
+    <div class="gal-head"><h3>바뀐 자리를 나란히</h3><span>05 · 4컷 (전후 비교)</span></div>
+    <p class="gal-note">왼쪽이 04, 오른쪽이 지금. 배치는 하나도 건드리지 않았고 글자만 바뀌었다.</p>
+
+    <div class="gallery wide">
+
+      <div class="shot">
+        <div class="lbl"><b>정상 팩의 판정 카드</b><span>가장 크게 어긋나던 자리</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#bbecd7; color:#058765; margin-bottom:9px; height:auto">
+            <div class="tag">● 04 · pack-ae v3</div>
+            <h2 style="font-size:19px">이상 없음 (확정 전)</h2>
+            <div class="sub" style="margin-bottom:7px">임계 내 · seq 4,090</div>
+            <div class="nums"><div><div class="k">판정</div><div class="v">확정 전</div></div></div>
+          </div>
+          <div class="verdict" style="background:#bbecd7; color:#058765; height:auto">
+            <div class="tag">● 지금 · pack-ae v3</div>
+            <h2 style="font-size:19px">이상 없음</h2>
+            <div class="sub" style="margin-bottom:7px">임계 내 · seq 4,090</div>
+            <div class="nums"><div><div class="k">판정</div><div class="v">주의</div></div></div>
+          </div>
+        </div></div>
+        <div class="note">제목 꼬리는 <b>짚은 것이 있을 때만</b> 붙인다. 정상 팩까지 붙이면
+        ‘이상 없음 (확정 전)’ 처럼 말이 어긋난다 — 그 경우의 미확정은 아래 판정 칸이 이미 ‘주의’ 로 말한다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>불량 팩의 판정 칸</b><span>확정 → 이상치 탐지</span></div>
+        <div class="body"><div class="app fit">
+          <div class="verdict" style="background:#ffd8d7; color:#da3944; margin-bottom:9px; height:auto">
+            <div class="tag">● 04</div>
+            <h2 style="font-size:19px">셀 단위 이상</h2>
+            <div class="sub" style="margin-bottom:7px">M05 CV06 전압 편차 확대</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+              <div><div class="k">판정</div><div class="v">확정</div></div>
+            </div>
+          </div>
+          <div class="verdict" style="background:#ffd8d7; color:#da3944; height:auto">
+            <div class="tag">● 지금</div>
+            <h2 style="font-size:19px">셀 단위 이상</h2>
+            <div class="sub" style="margin-bottom:7px">M05 CV06 전압 편차 확대</div>
+            <div class="nums">
+              <div><div class="k">문제 모듈</div><div class="v">M05</div></div>
+              <div><div class="k">판정</div><div class="v">이상치 탐지</div></div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">‘확정’ 은 절차가 끝났다는 말이지 무엇을 찾았는지 말해 주지 않는다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>팩 목록 배지</b><span>물음표 → 예상</span></div>
+        <div class="body"><div class="app fit">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+            <div>
+              <div class="cap" style="margin-bottom:5px">04</div>
+              <div class="btn alert">PACK 9005 · 셀이상</div>
+              <div class="btn sel">PACK 9008 · 용접?</div>
+              <div class="btn warn" style="margin-bottom:0">PACK 9003 · 센서?</div>
+            </div>
+            <div>
+              <div class="cap" style="margin-bottom:5px">지금</div>
+              <div class="btn alert">PACK 9005 · 셀이상</div>
+              <div class="btn sel">PACK 9008 · 용접 예상</div>
+              <div class="btn warn" style="margin-bottom:0">PACK 9003 · 센서 예상</div>
+            </div>
+          </div>
+        </div></div>
+        <div class="note">물음표는 ‘모르겠다’ 로 읽혀서 모델이 아무것도 못 짚은 것처럼 보인다.
+        실제로는 짚었고 다만 근거가 덜 찼을 뿐이다.</div>
+      </div>
+
+      <div class="shot">
+        <div class="lbl"><b>검사 결과판 오른쪽 끝</b><span>같은 함수를 쓴다</span></div>
+        <div class="body"><div class="app fit">
+          <div class="cap" style="margin-bottom:4px">04</div>
+          <div class="card" style="padding:4px 10px; margin-bottom:10px">
+            <div class="row"><span class="pill alert">이상</span><b>PACK 9005</b>
+              <span style="font-weight:600">셀 단위 이상</span><span class="when">확정</span></div>
+            <div class="row dim"><span class="pill warn">주의</span><b>PACK 9008</b>
+              <span style="font-weight:600">용접불량</span><span class="when">확정 전</span></div>
+            <div class="row"><span class="pill ok">정상</span><b>PACK 9001</b>
+              <span style="font-weight:600">–</span><span class="when">확정</span></div>
+          </div>
+          <div class="cap" style="margin-bottom:4px">지금</div>
+          <div class="card" style="padding:4px 10px">
+            <div class="row"><span class="pill alert">이상</span><b>PACK 9005</b>
+              <span style="font-weight:600">셀 단위 이상</span><span class="when">이상치 탐지</span></div>
+            <div class="row dim"><span class="pill warn">주의</span><b>PACK 9008</b>
+              <span style="font-weight:600">용접불량</span><span class="when">주의</span></div>
+            <div class="row"><span class="pill ok">정상</span><b>PACK 9001</b>
+              <span style="font-weight:600">–</span><span class="when">이상 없음</span></div>
+          </div>
+        </div></div>
+        <div class="note">카드와 결과판이 같은 <span class="mono">confirm_label()</span> 을 부른다.
+        따로 만들면 한쪽만 고쳤을 때 같은 상태를 두 이름으로 부르게 된다.</div>
+      </div>
+
+    </div>
+
+    <ul class="changes">
+      <li><span class="tag">한 곳</span><span>말을 <span class="mono">confirm_label(warmup, fault_type)</span> 하나로 모았다
+        <span class="why">같은 상태를 두 이름으로 부르는 것을 구조로 막는다</span></span></li>
+      <li><span class="tag">지킨 선</span><span>정상 팩에는 절대 ‘이상치 탐지’ 를 쓰지 않는다
+        <span class="why">‘이상 없음’ 이라고 크게 써 놓고 바로 아래 ‘이상치 탐지’ 라고 적으면 화면이 스스로 반대되는 말을 한다</span></span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================= 요약 ================= -->
+<section class="summary">
+  <h2>자리별로 본 다섯 단계</h2>
+  <p class="prose" style="color:var(--muted); margin-top:10px">한 자리가 단계마다 어떻게 바뀌었는지 가로로 읽는 표.
+  진한 칸이 그 단계에서 새로 들어오거나 바뀐 것이다.</p>
+  <div class="grid-wrap">
+    <table class="matrix">
+      <thead>
+        <tr><th>자리</th><th>01 · 21b63e2</th><th>02 · 2e1248a</th><th>03 · 7e7178f</th><th>04 · 2c2e7ea</th><th>05 · 작업본</th></tr>
+      </thead>
+      <tbody>
+        <tr><th>전체 구성</th><td>단일 페이지</td><td class="new">2단 (1 : 3.4)</td><td class="new">회색 레일 / 흰 본문 (1 : 3.6)</td><td>그대로</td><td>그대로</td></tr>
+        <tr><th>데이터 소스</th><td>/health 한 번</td><td class="new">Kafka 측정 · 판정 두 토픽</td><td>그대로</td><td class="new">+ api 재생 제어 REST</td><td>그대로</td></tr>
+        <tr><th>팩 선택</th><td>–</td><td class="new">충전/방전 세그먼트 + 2열 버튼</td><td class="new">충전만 · 1열 · 상태 라벨</td><td class="new">배지가 불량 유형으로</td><td class="new">‘용접?’ → ‘용접 예상’</td></tr>
+        <tr><th>판정 카드</th><td>–</td><td class="new">이상 감지 / 주의 관찰 / 정상 범위</td><td>그대로</td><td class="new">제목 = 불량 유형 · 아래층 ‘있었음’ · 이상 고정</td><td class="new">판정 칸 = 주의 / 이상치 탐지 / 이상 없음</td></tr>
+        <tr><th>충전량 도넛</th><td>–</td><td class="new">62% 게이지</td><td class="new">‘충전량’ 라벨 + 방향 표기</td><td class="new">이력 줄 추가</td><td>그대로</td></tr>
+        <tr><th>모듈 타일</th><td>–</td><td class="new">16칸 · 번호만</td><td class="new">‘M05 · 이상’ · hover 확대</td><td class="new">‘이력’ + 왼쪽 띠</td><td>그대로</td></tr>
+        <tr><th>차트</th><td>–</td><td class="new">셀 전압 11채널 · 온도 2채널 · 편차 보기</td><td>그대로</td><td class="new">이상 구간 띠 겹침</td><td>그대로</td></tr>
+        <tr><th>아래 목록</th><td>–</td><td class="new">최근 알림 (이상·주의만)</td><td>그대로</td><td class="new">검사 결과판 (정상 팩 포함)</td><td class="new">확신 표기 교체</td></tr>
+        <tr><th>수신 현황</th><td>–</td><td class="new">흰 카드 · 한 줄씩</td><td class="new">레일 위 큰 숫자 둘</td><td>그대로</td><td>그대로</td></tr>
+        <tr><th>조작</th><td>–</td><td>터미널에서 generator 실행</td><td>그대로</td><td class="new">헤더 우측 재생 · 정지 · 초기화</td><td>그대로</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="closing">한 줄로 줄이면 이렇다. <b>02</b> 에서 볼 것을 다 늘어놓고, <b>03</b> 에서 어디를 봐야 하는지 표면과 색으로 갈랐고,
+  <b>04</b> 에서 지나간 것을 남기고 조작을 화면 안으로 들였고, <b>05</b> 에서 화면이 쓰는 말을 골랐다.
+  세 단계 모두 같은 규칙을 지킨다 — <b>판정은 api 가 한 번만 하고, 화면은 받은 것을 그대로 칠한다.</b></p>
+</section>
+
+</div>

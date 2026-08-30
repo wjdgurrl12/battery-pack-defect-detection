@@ -359,7 +359,7 @@ def predict(row: dict, history: list | None = None) -> tuple[dict, dict] | None:
         state       'normal' / 'warning' / 'anomaly'
         module      문제 모듈 번호(1~16). 지목이 없으면 None
         cell        문제 셀 번호(1~11).   지목이 없으면 None
-        fault_type  불량 유형(셀 단위 이상 / 용접불량 / 센서불량). 정상이면 빈 문자열
+        fault_type  불량 유형(센싱와이어불량 / 용접불량 / 센서불량). 정상이면 빈 문자열
         warmup      True 면 판정이 아직 확정 전(SOC 칸 부족)
 
     **None 은 '이 행으로는 판정하지 않았다' 는 뜻이다** - 정상이 아니다.
@@ -488,4 +488,6 @@ def _detail(state: str, module: int | None, cell: int | None,
         return f"{fault_type or '이상'}{where}"
     if state == "warning":
         return f"{fault_type or '이상'}{where} (판정 확정 전)"
-    return "이상 없음(판정 확정 전)" if warmup else "이상 없음"
+    # 2026-08-29 결정: 표기를 '이상 없음' 에서 '정상' 으로 바꿨다. 화면의
+    # 판정 상태(정상/주의/이상)와 같은 말을 써야 한 상태가 한 이름으로 읽힌다.
+    return "정상 (판정 확정 전)" if warmup else "정상"

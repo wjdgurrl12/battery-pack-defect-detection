@@ -396,23 +396,23 @@ def test_location_parsing(label, expected):
 # 알람이 처음 뜨는 순간 화면 전체가 TypeError 로 멈췄다.
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("fault_type, expected", [
-    ("셀 단위 이상", "셀이상"),
-    ("용접불량", "용접"),
-    ("센서불량", "센서"),
-    ("셀 단위 이상, 용접불량", "셀이상+용접"),   # 스트림이 둘 걸리면 둘 다 적는다
-    ("", ""),                                  # 정상이면 유형이 없다
-    ("새 유형", "새 유형"),                     # 모르는 유형은 원문 그대로 (안 깨진다)
+@pytest.mark.parametrize("warmup, fault_type, expected", [
+    (True, "용접불량", "주의"),          # 근거가 덜 찼다 - 뒤집힐 수 있다
+    (True, "", "주의"),
+    (False, "용접불량", "이상치 탐지"),   # 근거가 충분한 상태에서 짚었다
+    (False, "센싱와이어불량, 용접불량", "이상치 탐지"),
+    (False, "", "정상"),               # **정상 팩에 '이상치 탐지' 를 쓰면 안 된다**
 ])
-def test_fault_short(fault_type, expected):
-    """불량 유형을 목록 배지용 짧은 이름으로 줄이는 부분.
+def test_confirm_label(warmup, fault_type, expected):
+    """확신 상태를 사람이 읽는 말로 옮기는 부분.
 
-    팩 단위 모델은 세 스트림을 따로 채점해 걸린 것을 전부 돌려주므로 유형이
-    둘 이상 나올 수 있다. 첫 번째만 보여주면 나머지를 놓친다.
+    '확정' 을 그냥 '이상치 탐지' 로 바꾸면 정상 팩의 카드가 '정상' 이라고
+    크게 써 놓고 바로 아래에 '이상치 탐지' 라고 적는다. 그 조합이 안 나오는지
+    보는 것이 이 테스트의 목적이다.
     """
     import app
 
-    assert app.fault_short(fault_type) == expected
+    assert app.confirm_label(warmup, fault_type) == expected
 
 
 _seq = itertools.count()
@@ -454,6 +454,42 @@ def test_provisional_verdicts_stay_out_of_the_history():
     assert [v["serial_number"] for v in buffer.results()] == [9008]
 
 
+def test_orbit_candidates_match_model_labels():
+    """궤도 후보 이름이 모델의 표시 이름과 같은가.
+
+    app 은 무겁다는 이유로 battery_anomaly 를 import 하지 않고 이름을
+    복제해 뒀다(VERDICT_CANDIDATES 주석). 복제는 갈라질 수 있으므로 여기서
+    묶는다 - 모델 라벨이 바뀌면(예: 셀 단위 이상 -> 센싱와이어불량) 궤도도
+    같이 바뀌어야 하고, 안 바뀌면 이 테스트가 잡는다.
+    """
+    import app
+    from battery_anomaly import STREAM_LABEL
+
+    names = list(app.VERDICT_CANDIDATES)
+    assert set(STREAM_LABEL.values()) <= set(names), (
+        "모델이 낼 수 있는 유형이 캐러셀 후보에 없다")
+    assert "정상" in names
+
+
+def test_orbit_markup_is_stable_between_redraws():
+    """궤도 조각이 그리기마다 같은 바이트인가.
+
+    Streamlit 은 markdown 내용이 안 바뀌면 DOM 을 건드리지 않아 CSS
+    애니메이션이 이어 돈다. 벽시계 위상처럼 매번 달라지는 값이 다시
+    들어오면 3초마다 회전이 처음부터 다시 시작해 '돌다 만다' - 실제로
+    겪은 회귀라 여기서 잡는다.
+    """
+    import time as clock
+
+    import app
+
+    first = app.verdict_orbit(0, spinning=True)
+    clock.sleep(0.05)
+    assert app.verdict_orbit(0, spinning=True) == first
+    # 확정 상태도 마찬가지다
+    assert app.verdict_orbit(1, spinning=False) == app.verdict_orbit(1, spinning=False)
+
+
 def test_screen_survives_every_verdict_shape():
     """화면이 판정의 모든 모양을 받아도 죽지 않아야 한다.
 
@@ -467,7 +503,7 @@ def test_screen_survives_every_verdict_shape():
     shapes = [
         _verdict(9001, "normal", "", None, None, False),          # 정상
         _verdict(9003, "anomaly", "용접불량", 7, None, False),      # 모듈까지
-        _verdict(9005, "anomaly", "셀 단위 이상", 5, 6, False),      # 셀까지
+        _verdict(9005, "anomaly", "센싱와이어불량", 5, 6, False),      # 셀까지
         _verdict(9007, "warning", "센서불량", 1, None, True),       # 미확정
     ]
     buffer = VerdictBuffer()

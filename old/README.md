@@ -21,6 +21,22 @@
 파일들끼리는 서로를 참조한다(`cross_validate.py` 가 `import step1_clean` 하는 식).
 그래서 `src/` 하위 구조를 그대로 옮겼다 — 한 폴더에 모여 있어야 그대로 돌아간다.
 
+## 2026-08-30 에 추가로 들어온 것
+
+| 경로 | 무엇 | 왜 |
+|---|---|---|
+| `inject_anomalies.py` | 재생 중인 스트림의 셀 하나를 일회성으로 띄우던 개발 도구 | 데모 팩이 생기면서 고장이 데이터 자체에 들어갔다. 발행 직전에 또 흔들면 정답표(`database.DEMO_PACKS`)와 대조가 안 된다 |
+
+이 파일은 `sensor_generator.make_anomalous` 를 공유해 썼는데, 그 함수와
+`AnomalyPlan`·`--anomaly-every` 옵션(발행 루프 쪽 주입 일체)도 같은 날
+sensor_generator 에서 지워졌다. **그래서 이 파일은 이대로는 돌지 않는다** -
+되살리려면 git 이력에서 sensor_generator 의 '3단계: 이상치 주입' 을 함께 꺼낸다.
+
+같은 날 파일 없이 지워진 것들(전부 어디서도 안 쓰이는 것을 확인했다):
+`schemas.py`(pydantic import 한 줄짜리 빈 껍데기), `database.py` 의
+`SessionLocal`/`get_db`/`check_db_connection`(초기 ORM 골격), `app.py` 의
+`CHARGE_TONES`(사이드바 배지 시절의 색 짝).
+
 ## 무엇이 달라졌나
 
 | | 옛 모델 (여기) | 새 모델 |

@@ -58,7 +58,6 @@ Streamlit 은 스스로 판단하지 않고 **받은 판정을 그대로 칠하�
 | **Streamlit 화면 갱신** | **3초** | `app.py` `REFRESH_EVERY = "3s"` |
 | 컨슈머 폴링 루프 | 1초 타임아웃으로 회전 | `consumer.py` `self._consumer.poll(1.0)` |
 | 토픽 메타데이터 갱신 | 5초 (기본 5분은 너무 길다) | `consumer.py` `topic.metadata.refresh.interval.ms` |
-| 이상 주입 도구 | 3초 간격 | `inject_anomalies.py` `--interval` 기본 3.0 |
 | 헬스체크 | api·streamlit 10초 / postgres 5초 / broker 10초 | `docker-compose.yml` |
 
 ### 이 숫자들의 관계 (중요)
@@ -92,7 +91,6 @@ Streamlit 은 스스로 판단하지 않고 **받은 판정을 그대로 칠하�
 | `src/…/detector.py` | 판정 | 측정 메시지 ↔ 모델 사이의 **번역**. 판정 안 한 행은 `None` |
 | `main.py` (api) | 구독 → 판정 → 발행 | 파이프라인의 심장. HTTP 는 들여다보는 창일 뿐 |
 | `app.py` (streamlit) | 화면 | 측정으로 차트를, 판정으로 색을 칠한다. 판단은 하지 않는다 |
-| `inject_anomalies.py` | 개발용 도구 | 진짜 측정의 셀 하나만 띄워 **측정 토픽에** 넣는다 (판정은 api 에게 맡긴다) |
 
 ---
 
@@ -234,9 +232,9 @@ power  =  voltage × current / 1000        (최대 오차 0.078 kW)
 dv     =  (v_max - v_min) × 1000          (오차 0)
 ```
 
-검증에 쓸 수 있다. `inject_anomalies.make_anomalous()` 가 셀을 띄울 때
-`v_min` / `v_max` / `dv` 를 함께 고치는 이유가 이것이다 — 한 행 안에서 이 관계가 깨지면
-메시지가 스스로 모순된다.
+검증에 쓸 수 있다. 측정을 만들거나 고치는 쪽은 파생 컬럼을 반드시 같이
+고쳐야 한다 — 한 행 안에서 이 관계가 깨지면 메시지가 스스로 모순된다.
+(데모 팩 생성기가 Voltage/Vmin/Vmax/DV 를 다시 맞추는 이유가 이것이다)
 
 **④ 시간대.** 원본 `Date` / `Time` 에 시간대 정보가 없어 **KST(+09:00)** 로 보고 오프셋을 붙인다.
 `produced_at` 과 `detected_at` 만 UTC 다.
@@ -382,8 +380,8 @@ SOC 칸이 4/16 에 못 미치면 `judge()` 가 아예 `None` 을 준다(4.5절)
   "serial_number": 1003, "mode": "chg",
   "measured_at": "2020-08-07T16:25:38+09:00", "seq": 2007,
   "state": "anomaly", "module": 9, "cell": 3,
-  "fault_type": "셀 단위 이상", "warmup": false,
-  "detail": "셀 단위 이상 M09CV03",
+  "fault_type": "센싱와이어불량", "warmup": false,
+  "detail": "센싱와이어불량 M09CV03",
   "model": { "name": "battery-anomaly-ae", "version": "7.505-0.809-2.169" } }
 ```
 
@@ -500,7 +498,7 @@ Kafka 는 **그룹 단위로 오프셋을 관리**한다. 그룹이 다르면 �
   ▼
 누적분 전체로 PackData 재구성 → SOC 16칸으로 접는다
   ▼
-  ├ 셀 단위 이상 : 로버스트 z (팩 내부 비교)      임계 7.505
+  ├ 센싱와이어불량 : 로버스트 z (팩 내부 비교)      임계 7.505
   ├ 용접불량     : AE 재구성 오차 (모듈 편차)     임계 0.809
   └ 센서불량     : AE 재구성 오차 (온도)         임계 2.169
   ▼
@@ -641,9 +639,8 @@ docker compose exec dev python sensor_generator.py
 docker compose exec dev python sensor_generator.py --serial 1000 --mode chg --limit 100
 docker compose exec dev python sensor_generator.py --interval 1     # 빠르게 재생
 
-# 3. 이상 판정이 화면에 뜨는지 확인 (서로 다른 모듈 8곳을 순서대로 띄운다)
-docker compose exec dev python inject_anomalies.py
-docker compose exec dev python inject_anomalies.py --serial 1000 --count 8
+# 3. 이상 판정이 화면에 뜨는지 확인 - 데모 팩에 고장이 들어 있어 그냥 재생하면 된다
+docker compose exec dev python sensor_generator.py --serial 9003 --interval 0.05
 
 # 4. 환경 점검
 docker compose exec dev pytest
@@ -675,16 +672,14 @@ docker compose exec dev pytest
    "예외가 안 났으니 연결됐다" 고 믿으면 안 된다.
 2. **`mode` 를 키에 넣으면 안 된다.** 파티션 배정에 관여하는 것은 키뿐이다. 키에 이어붙이면
    (`1000_chg`) 같은 팩의 충전과 방전이 다른 파티션으로 갈라진다(실측 6팩 중 4팩). 그래서 헤더에 뒀다.
-3. **`inject_anomalies.py` 는 판정 토픽에 직접 쓰지 않는다.** 손으로 쓴 판정을 밀어 넣으면
-   화면은 칠해지지만 정작 확인하려던 것 — api 가 이 측정을 이상으로 보는가 — 은 확인되지 않는다.
-4. **이상 주입 시 이탈 폭에 주의.** 셀 하나만 올리면 팩 평균도 그쪽으로 1/176 만큼 끌려가므로
-   실제 이탈은 올린 값의 175/176 이다. `anomaly` 경계가 16.8mV 라 25mV 부터 잡았다.
-5. **`PYTHONPATH=/workspace/src`** 가 없으면 세 컨테이너 모두
+3. **판정 토픽에 손으로 쓴 판정을 밀어 넣지 않는다.** 화면은 칠해지지만 정작
+   확인하려던 것 — api 가 이 측정을 이상으로 보는가 — 은 확인되지 않는다.
+4. **`PYTHONPATH=/workspace/src`** 가 없으면 세 컨테이너 모두
    `import battery_pack_defect_detection` 이 실패한다. src 레이아웃인데 이미지에는
    의존성만 굽기(`--no-install-project`) 때문이다.
-6. **의존성만 바뀌면 이미지를 다시 굽지 않아도 된다.** 각 컨테이너가 뜰 때 `uv sync --locked` 로
+5. **의존성만 바뀌면 이미지를 다시 굽지 않아도 된다.** 각 컨테이너가 뜰 때 `uv sync --locked` 로
    맞춘다. 받는 쪽은 `git pull` 후 `docker compose up -d`. 이미지 재빌드는 `Dockerfile` 이 바뀔 때만.
-7. **`db/init/*.sql` 은 Postgres 최초 기동 시 1회만 실행된다.** 이미 볼륨이 있으면
+6. **`db/init/*.sql` 은 Postgres 최초 기동 시 1회만 실행된다.** 이미 볼륨이 있으면
    `docker compose down -v` 로 지워야 다시 적용된다.
 
 ### 모델 쪽 함정 — 어겨도 예외가 안 나고 조용히 틀린다

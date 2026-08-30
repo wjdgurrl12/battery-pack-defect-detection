@@ -48,6 +48,46 @@ Kafka 발행→수신 왕복), `test_detector.py` 는 **모델**(번들 로드, 
 - 초기 스키마가 필요하면 `db/init/*.sql` 에 넣는다. Postgres 최초 기동 시 1회 실행되므로,
   이미 볼륨이 있으면 `docker compose down -v` 로 지워야 다시 적용된다.
 
+## 배포용 이미지 (clone 없이 띄우기)
+
+시연·전달용으로는 **코드와 모델과 데모 데이터까지 구운 이미지**를 쓴다.
+저장소를 받지 않아도, 파이썬을 깔지 않아도, 데이터를 적재하지 않아도 된다.
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+# http://localhost:8501 → 오른쪽 위 '재생'
+```
+
+포트가 개발 스택과 같으므로 둘을 동시에 띄울 수는 없다. 개발 스택이 떠 있으면
+`docker compose down` 을 먼저 한다.
+
+| 이미지 | 내용 |
+|---|---|
+| `4dcookie/battery-pack-app` | api·streamlit 공용. 의존성 + 코드 + `models/battery_anomaly.pkl` |
+| `4dcookie/battery-pack-postgres-demo` | 데모 9팩(9001~9009)이 이미 적재된 Postgres |
+| `4dcookie/vibration-monitoring-dev` | 개발용. 의존성만 (코드는 마운트) |
+
+`Dockerfile` 하나가 이 셋을 전부 담는다. 바닥(의존성)이 같아서 파일을 나누면
+두 벌이 어긋나기 때문이다. 무엇을 구울지는 `--target` 으로 고른다.
+
+```
+deps ─┬─▶ dev            개발용. 코드를 굽지 않는다
+      └─▶ runtime ──┬──▶ (api · streamlit)
+                    └──▶ seedgen ──▶ postgres-demo
+```
+
+- **데모 데이터**는 저장소의 `db/data/DEMO*_chg.csv` 에서 만든다. `seedgen`
+  스테이지가 `load_raw.py` 의 변환(231컬럼 → 배열 2개)을 그대로 빌려
+  COPY 덤프로 뽑고, 그것이 `postgres-demo` 의 초기화 스크립트가 된다.
+  적재 규칙이 개발과 배포에서 갈라지지 않게 하려는 것이다.
+- **원본 50팩(600MB)은 이미지에 넣지 않는다.** 배포 이미지가 답해야 할 것은
+  '데모가 도는가' 지 '원본을 다 들고 있는가' 가 아니다. 원본을 재생하려면
+  개발 스택에서 `load_raw.py` 로 적재한 뒤 `sensor_generator.py --original` 을 쓴다.
+- 데모 적재는 **볼륨이 비어 있을 때 1회**만 돈다. 다시 넣으려면
+  `docker compose -f docker-compose.prod.yml down -v`.
+
+이미지를 다시 굽고 올리는 법은 [`CONTRIBUTING.md`](CONTRIBUTING.md) 에 있다.
+
 ## 무엇이 들어 있나
 
 ```

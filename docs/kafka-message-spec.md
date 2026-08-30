@@ -178,16 +178,14 @@ kafka-ui 목록과 컨슈머가 JSON 을 파싱하지 않고도 구분할 수 �
 |---|---|:---:|---|
 | `label` | string \| null | ❌ | `"normal"` / `"warning"` / `"defect"` / `null` |
 
-**원본 데이터에 정답 라벨이 없으므로 원본을 그대로 재생한 행은 `null` 이다.**
-예외는 도구가 이상치를 심은 행이다 — 그 행의 정답은 심은 쪽이 알므로 `"defect"` 를
-싣는다(v1.6.0). 심는 곳은 두 군데다:
+**지금 발행되는 모든 행에서 `null` 이다.** 발행 직전에 이상치를 심고 그 행에
+`"defect"` 를 싣던 도구들(v1.6.0 의 `--anomaly-every`, `inject_anomalies.py`)은
+2026-08-30 에 걷어냈다 — 데모 팩은 고장이 데이터 자체에 들어 있고, 정답은
+메시지가 아니라 `database.DEMO_PACKS` 가 팩 단위로 들고 있다.
 
-- `sensor_generator.py --anomaly-every N` : 재생 중 N행마다 셀 하나를 골라 연속으로 띄운다
-- `inject_anomalies.py` : 원하는 팩/셀에 일회성으로 주입한다
-
-컨슈머는 이 값을 판정에 쓰면 안 된다(판정 권한은 api 한 곳뿐이다).
-판정 결과와 정답을 맞춰 보는 평가 용도로만 쓴다. `"normal"` / `"warning"` 은
-여전히 예약만 되어 있다 — 규칙 기반으로 파생하거나 라벨 데이터를 확보하면 채운다.
+필드는 명세에 남긴다. 없애면 컨슈머와 명세가 같이 움직여야 하는데, 실제 라벨
+데이터를 확보하면 다시 쓸 자리다. 컨슈머는 이 값을 판정에 쓰면 안 된다
+(판정 권한은 api 한 곳뿐이다).
 
 ---
 
@@ -320,7 +318,7 @@ per_module = [sum(cells) / len(cells) for cells in msg["cell"]["voltages"]]
 | | |
 |---|---|
 | 무엇이 심겼는지 | `database.DEMO_PACKS` 에 팩별 유형·자리·크기·기대 판정이 있다 |
-| 구성 | 정상 2 · 용접불량 2 · 셀 단위 이상 2 · 센서불량 2 · 검출한계 미만 1 |
+| 구성 | 정상 2 · 용접불량 2 · 센싱와이어불량 2 · 센서불량 2 · 검출한계 미만 1 |
 | 재생 | `python sensor_generator.py` (기본). 원본 50팩은 `--original` |
 | 기본 스트림에서 뺀 이유 | 합성 데이터가 원본 통계에 섞이면 안 되고, 위 38,058건도 흔들린다. `demo=True` 로 부를 때만 나온다 |
 
@@ -403,14 +401,19 @@ SOC 32.3% 에서 84행(1.4분) 멈췄다가 다시 충전한다).
 **시간 공백.** 원본은 1초 주기지만 **5초를 넘는 공백이 37개 파일에 255건** 있다(최대 3,490초).
 시계열을 빈틈없이 연속이라 가정하는 로직은 여기서 깨진다.
 
-**검증.** `schemas.py` 의 Pydantic 모델로 파싱하면 형식 오류가 그 자리에서 잡힌다.
+**검증.** 형식은 [`kafkadata.json`](../kafkadata.json)(JSON Schema)이 정본이다.
+tests/test_detector.py 가 판정 메시지를 검증하는 것과 같은 방식으로 쓰면 된다.
 JSON 을 직접 dict 로 다루면 필드명 오타가 런타임까지 살아남는다.
 
 ```python
-from battery_pack_defect_detection.schemas import PackMeasurement
+import json, jsonschema
 
-reading = PackMeasurement.model_validate_json(msg.value)   # 여기서 바로 에러
+schema = json.load(open("kafkadata.json", encoding="utf-8"))
+jsonschema.validate(json.loads(msg.value()), schema)   # 형식 오류가 여기서 바로 잡힌다
 ```
+
+(예전에 안내하던 `schemas.py` Pydantic 모델은 실제로 만들어지지 않은 채
+빈 껍데기로 남아 있어 2026-08-30 에 지웠다.)
 
 ---
 
@@ -418,6 +421,7 @@ reading = PackMeasurement.model_validate_json(msg.value)   # 여기서 바로 �
 
 | 버전 | 날짜 | 내용 |
 |---|---|---|
+| 1.8.0 | 2026-08-30 | 발행 직전 이상치 주입 제거 — `label` 은 모든 행에서 `null` 이 됐다. 필드 구성은 그대로라 `schema_version` 은 1.2.0 유지. 도구는 `old/` 로 이동 |
 | 1.7.0 | 2026-08-27 | 데모 팩 9개(serial 9001~9009) 추가. generator 의 기본 재생 대상이 데모 팩으로 바뀌었다(원본은 `--original`). 원본 스트림에서는 `DEMO_SERIALS` 로 빠지므로 38,058건은 그대로. 필드 구성은 안 바뀌어 `schema_version` 은 1.2.0 유지 |
 | 1.6.0 | 2026-08-26 | 이상치 주입 행은 `label: "defect"` 로 발행 (generator `--anomaly-every` 옵션, inject_anomalies). 필드 구성은 그대로라 `schema_version` 은 1.2.0 유지 |
 | 1.5.0 | 2026-08-26 | 방전 전량 제외(`EXCLUDE_DCHG`). 통전 구간만 발행(`CURRENT_ON_AMPS`) — 125,488 → 38,058건 |

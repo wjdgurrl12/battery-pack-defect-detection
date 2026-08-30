@@ -24,6 +24,7 @@ Kafka 로 흘러들면 사람이 새로고침하지 않아도 화면이 따라�
 """
 
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -99,27 +100,13 @@ ACTIVE_WITHIN_SECONDS = 10
 # 판정 메시지의 state(영어) -> 화면 표기(한글)
 STATE_KO = {"anomaly": "이상", "warning": "주의", "normal": "정상"}
 
-# 불량 유형 -> 목록·배지에 쓸 짧은 이름.
+# 판정 카드의 타원 궤도에 올릴 후보 이름 4개. 첫 자리(정상)가 기본 정면이다.
 #
-# 2026-08-27 추가. 모델이 팩 단위로 바뀌면서 **유형이 판정의 핵심 산출물**이
-# 됐다(그 전에는 점수가 임계를 넘었는가뿐이었다). 팩 목록과 결과판에서 유형을
-# 바로 읽을 수 있어야 하는데 '셀 단위 이상' 은 배지에 넣기엔 길다.
-#
-# 키는 battery_anomaly.STREAM_LABEL 의 값이다. 모델이 새 유형을 내면 여기에
-# 없어서 원문이 그대로 나온다 - 깨지지 않고 길어지기만 한다.
-FAULT_SHORT = {"셀 단위 이상": "셀이상", "용접불량": "용접", "센서불량": "센서"}
+# 불량 유형 이름은 모델의 battery_anomaly.STREAM_LABEL 값과 일치해야 한다
+# (테스트가 대조한다). 그 모듈을 import 해서 쓰지 않는 이유: sklearn 까지
+# 끌려와 화면 컨테이너의 기동이 무거워진다. 여기는 이름만 필요하다.
+VERDICT_CANDIDATES = ("정상", "용접불량", "센싱와이어불량", "센서불량")
 
-
-def fault_short(fault_type: str) -> str:
-    """'셀 단위 이상, 용접불량' -> '셀이상+용접'. 비어 있으면 빈 문자열.
-
-    모델은 세 스트림을 따로 채점해서 걸린 것을 전부 돌려주므로 유형이 둘 이상
-    나올 수 있다. 첫 번째만 보여주면 나머지를 놓친다.
-    """
-    if not fault_type:
-        return ""
-    parts = [t.strip() for t in fault_type.split(",") if t.strip()]
-    return "+".join(FAULT_SHORT.get(t, t) for t in parts)
 
 # 차트에 그릴 창 길이. 데이터가 5초 간격이므로 건수 x 5초 = 실제 시간이다.
 # None 은 커서까지 전부 - 구간 하나가 1,000~2,500건이라 2~3시간 분량이다.
@@ -165,15 +152,6 @@ TONES = {
     "정상": (PALETTE["ok_fg"], PALETTE["ok_soft"]),
 }
 
-# 충전 진행 배지의 (전경, 배경). 판정색(TONES)과 **다른 축**이라는 점이 중요하다.
-# 한 버튼에 배지가 둘 붙으므로, 둘이 같은 색을 쓰면 어느 쪽이 무슨 뜻인지 섞인다.
-#   진행 = 파랑 계열(액션색) + 중립,  판정 = 의미색(빨강/주황/초록)
-# '충전 완료' 만 초록을 쓰는데, 이건 '끝났다' 를 알리는 자리라 의미색이 맞다.
-CHARGE_TONES = {
-    "충전 완료": (PALETTE["ok_fg"], PALETTE["ok_soft"]),
-    "충전 중": (PALETTE["select"], PALETTE["info_soft"]),
-    "대기": (PALETTE["muted"], PALETTE["line"]),
-}
 
 st.set_page_config(page_title="배터리팩 품질검사 모니터링",
                    layout="wide", initial_sidebar_state="collapsed")
@@ -360,6 +338,29 @@ def target_label(module: int | None, cell: int | None, empty: str = "지목 없�
     if module is None:
         return empty
     return f"M{module:02d}" if cell is None else f"M{module:02d} CV{cell:02d}"
+
+
+def confirm_label(warmup: bool, fault_type: str) -> str:
+    """판정의 확신 상태를 사람이 읽는 말로. 판정 카드와 검사 결과판이 같이 쓴다.
+
+    2026-08-27: '확정 전 / 확정' 에서 이 말로 바꿨다. '확정' 은 절차의 상태라
+    무엇을 찾았는지 말해 주지 않는데, 화면을 보는 사람이 알고 싶은 것은
+    '이 팩에서 무엇이 나왔나' 다.
+
+        주의         SOC 칸이 덜 차 아직 뒤집힐 수 있다 (warmup)
+        이상치 탐지   근거가 충분한 상태에서 불량을 짚었다
+        정상         근거가 충분한 상태에서 아무것도 안 나왔다
+
+    **정상 팩에 '이상치 탐지' 를 쓰면 안 된다.** '확정' 을 그 말로 그냥
+    바꾸면 정상 팩의 카드가 '정상' 이라고 크게 써 놓고 바로 아래에
+    '이상치 탐지' 라고 적는다 - 화면이 스스로 반대되는 말을 한다.
+
+    말을 여기 한곳에 둔 이유: 카드와 결과판이 따로 만들면 한쪽만 고쳤을 때
+    같은 상태를 두 이름으로 부르게 된다.
+    """
+    if warmup:
+        return "주의"
+    return "이상치 탐지" if fault_type else "정상"
 
 
 def seconds_ago(iso: str | None) -> str:
@@ -645,9 +646,12 @@ def render_sidebar(packs: pd.DataFrame, measurements: kc.MeasurementBuffer,
     없고 kind="primary" 로 선택 상태를 그대로 표현할 수 있다.
 
     2026-08-26 결정으로 방전은 다루지 않는다(database.EXCLUDE_DCHG). 충전/방전
-    선택 컨트롤이 사라졌고, 팩 하나가 한 줄을 통째로 쓴다. 버튼에는 팩 번호와
-    상태 배지 둘이 들어간다 - 충전 진행(충전 중/충전 완료/대기)과 판정(정상/
-    주의/이상)이다. 스텝 수는 뺐다.
+    선택 컨트롤이 사라졌고, 팩 하나가 한 줄을 통째로 쓴다.
+
+    2026-08-27 결정: 팩 번호 옆에 붙던 판정 배지를 뺐다. 자세한 유형은 판정
+    카드가 말하고, 목록은 **어느 팩을 봐야 하는가**만 말한다 - 이상으로 확정된
+    팩에 모듈 타일과 같은 방식의 붉은 테두리를 두른다. '자동 순환' 을 켜면
+    주기마다 다음 팩으로 넘어간다(발표에서 손을 떼도 화면이 돌게).
     """
     # naive 한 datetime.now() 를 쓰면 컨테이너의 UTC 가 그대로 찍힌다.
     now = datetime.now(KST)
@@ -687,16 +691,28 @@ def render_sidebar(packs: pd.DataFrame, measurements: kc.MeasurementBuffer,
     if st.session_state.get("pack") not in {(s, MODE) for s in serials}:
         st.session_state.pack = (serials[0], MODE)
 
-    # 라벨은 'PACK 1000 · 정상' 한 줄이다(목업).
+    # 자동 순환. 토글 위젯은 목록 아래에 그리지만 상태는 session_state 에
+    # 남아 있어 여기서 먼저 읽는다 - 선택을 바꾼 **뒤에** 버튼을 그려야
+    # 파란 강조가 새 팩을 가리킨다.
     #
-    # **상태 글자를 ::after 로 붙이지 않는다.** 그렇게 했더니 글자가 버튼 밖으로
-    # 삐져나왔다. 원인은 Streamlit 의 st.button 이 기본으로 width='content' 라
-    # 버튼 상자가 라벨 크기에 맞춰지고, 나중에 CSS 로 붙인 가상 요소는 그 계산에
-    # 들어가지 않아서다. 라벨 안에 넣으면 상자가 처음부터 그만큼 잡힌다.
-    # (폭은 아래 st.button(width="stretch") 로 열에 꽉 채운다)
+    # 화면 자체가 3초마다 다시 그려지므로(REFRESH_EVERY) 실제 전환은 그
+    # 배수 시점에 일어난다. 주기를 3초보다 작게 둘 수 없는 이유다.
+    if st.session_state.get("rotate"):
+        now = time.monotonic()
+        period = st.session_state.get("rotate_period", 9)
+        if now - st.session_state.get("rotate_at", 0.0) >= period:
+            st.session_state.rotate_at = now
+            here = st.session_state.pack[0]
+            i = serials.index(here) if here in serials else -1
+            st.session_state.pack = (serials[(i + 1) % len(serials)], MODE)
+
+    # 라벨은 팩 번호뿐이다 - 'PACK 9003'.
     #
-    # 상태 한 자리에 무엇을 넣는가: **판정이 있으면 판정, 없으면 충전 진행**이다.
-    # 목업의 'PACK 1004 · 대기' 가 그 경우다 - 측정은 왔는데 아직 판정 전.
+    # 2026-08-27: 옆에 붙던 판정 배지(용접 / 셀이상 예상 ...)를 뺐다. 자세한
+    # 유형은 판정 카드의 몫이고, 목록은 어느 팩을 봐야 하는가만 말한다.
+    # 이상으로 **확정된** 팩은 붉은 테두리를 두른다 - 모듈 타일이 지목된
+    # 칸을 형태로 알리는 것과 같은 방식이고, 글자보다 훑을 때 빨리 걸린다.
+    # 주의(미확정)는 아직 뒤집힐 수 있으므로 조용히 둔다.
     labels, rules = {}, []
     for serial in serials:
         target = f'.st-key-pk-{serial} div[data-testid="stButton"] > button'
@@ -705,32 +721,26 @@ def render_sidebar(packs: pd.DataFrame, measurements: kc.MeasurementBuffer,
         # 켠 직후 잠깐은 비는 것이 정상이다.
         verdict = verdicts.latest_for(serial, MODE)
         charge = charge_state(measurements.latest(serial, MODE))
-        if verdict is not None:
-            state = STATE_KO[verdict["state"]]
-            # **배지에 판정이 아니라 불량 유형을 적는다.** 팩 단위 모델은
-            # '이상' 만이 아니라 '무엇이' 까지 내놓으므로, 목록에서 바로
-            # 읽히는 편이 낫다. 정상이면 유형이 없어 판정 그대로 쓴다.
-            # 미확정이면 물음표를 붙여 뒤집힐 수 있음을 드러낸다.
-            badge = fault_short(verdict["fault_type"]) or state
-            if verdict["warmup"]:
-                badge += "?"
-        else:
-            state = charge if charge != "충전 완료" else "판정 전"
-            badge = state
-        labels[serial] = f"PACK {serial} · {badge}"
+        labels[serial] = f"PACK {serial}"
 
-        # 색은 봐야 할 것에만 준다. 전부 칠하면(정상까지 초록) 목록이 알록달록해져
-        # 정작 빨간 줄이 안 띈다. 정상·판정 전은 중립으로 두고 주의/이상만 틴트를 깐다.
-        if state in ("주의", "이상"):
-            fg, bg = TONES[state]
-            rules.append(f'{target}:not([kind="primary"]){{background:{bg};'
-                         f'color:{fg};border-color:{PALETTE["strong"]};}}')
-            rules.append(f'{target}:not([kind="primary"]) p{{color:{fg};}}')
-
-        # 지금 충전 중인 팩은 왼쪽 모서리에 굵은 선을 준다. 판정(색)과 다른 축이라
-        # 겹쳐도 안 헷갈리고, 라벨 폭을 건드리지 않아 삐져나올 일이 없다.
+        # 지금 충전 중인 팩은 왼쪽 모서리에 굵은 선을 준다. 판정(붉은 테두리)과
+        # 다른 축이라 겹쳐도 안 헷갈린다.
         if charge == "충전 중":
             rules.append(f'{target}{{border-left:3px solid {PALETTE["action"]};}}')
+
+        # 확정된 이상만 두른다. 충전 중 규칙보다 **뒤에** 둬야 두 규칙이 한
+        # 버튼에 같이 걸렸을 때 왼쪽 변도 붉게 이긴다(같은 특이도면 나중 것).
+        #
+        # 테두리는 **추가**이지 교체가 아니다 - 안쪽은 배지 시절과 같은
+        # 의미색 틴트(붉은 채움 + 붉은 글씨)를 그대로 유지한다. 선택된
+        # 팩(primary, 파란 채움)만 예외다: 채움이 선택 신호라 틴트를 얹지
+        # 않고 테두리만 두른다. 파랑 채움에 붉은 테두리면 '지금 보는 팩이
+        # 이상' 으로 읽힌다.
+        if verdict is not None and verdict["state"] == "anomaly":
+            fg, bg = TONES["이상"]
+            rules.append(f'{target}{{border:2px solid {fg};}}')
+            rules.append(f'{target}:not([kind="primary"]){{background:{bg};color:{fg};}}')
+            rules.append(f'{target}:not([kind="primary"]) p{{color:{fg};}}')
 
     st.markdown(
         "<style>"
@@ -769,9 +779,99 @@ def render_sidebar(packs: pd.DataFrame, measurements: kc.MeasurementBuffer,
                          type="primary" if serial == st.session_state.pack[0]
                               else "secondary"):
                 st.session_state.pack = (serial, MODE)
+                # 직접 고른 팩이 순환에 곧장 밀려나지 않게 주기를 다시 센다
+                st.session_state.rotate_at = time.monotonic()
                 st.rerun()
 
+    # 자동 순환 조작. 넘기는 로직은 위(버튼을 그리기 전)에 있다.
+    st.toggle("팩 자동 순환", key="rotate",
+              help="켜면 주기마다 다음 팩으로 넘어간다. 팩을 직접 누르면 그 "
+                   "팩부터 주기를 다시 센다. 화면이 3초마다 갱신되므로 실제 "
+                   "전환도 그 배수 시점에 일어난다.")
+    if st.session_state.get("rotate"):
+        st.slider("순환 주기(초)", 3, 30, 9, key="rotate_period")
+
     return st.session_state.pack
+
+
+def verdict_orbit(front: int, spinning: bool) -> str:
+    """판정 카드 오른쪽 빈자리에 넣는 후보 타원 궤도(HTML 조각).
+
+    미정인 동안(spinning) 후보 4개의 이름이 타원을 따라 돈다 - 아래쪽에
+    올수록 크고 진하게, 위쪽(먼 쪽)은 작고 흐리게 해서 깊이가 읽힌다.
+    판정이 확정되면 멈추고, 확정된 이름이 타원 아래 정면에 서서 카드
+    글자색을 그대로 물려받아 강조된다(front). 나머지는 흐려진다.
+
+    구현 노트: 이 조각은 **그리기마다 같은 바이트여야 한다.** Streamlit 은
+    markdown 내용이 바뀌지 않으면 DOM 을 건드리지 않아 CSS 애니메이션이
+    클라이언트에서 그대로 이어 돈다. 처음에는 벽시계 위상을 animation-delay
+    에 넣었는데, 그 값 자체가 3초마다 달라져 카드가 매번 다시 그려졌고
+    회전이 '돌다 마는' 것처럼 보였다(2026-08-29 수정). 지금은 위상이
+    고정이고, 카드를 그리는 쪽도 확정 전에는 매 판정마다 바뀌는 값(seq)을
+    본문에서 뺀다 - 한 글자라도 바뀌면 다시 그려진다.
+
+    타원 좌표는 keyframes 12분할로 미리 계산해 넣는다 - CSS 만으로 타원
+    궤도를 그리는 표준 수단(offset-path)은 브라우저마다 기준 상자 해석이
+    달라서, 좌표를 직접 주는 쪽이 확실하다.
+    """
+    import math
+
+    period = 12.0                      # 한 바퀴(초). 후보당 3초 = 화면 갱신 주기
+    rx, ry = 138, 56                   # 타원 반지름(px)
+
+    labels = []
+    for i, name in enumerate(VERDICT_CANDIDATES):
+        if spinning:
+            # 후보 간 간격(1/4 바퀴)만 준다. 위상에 시계를 섞으면 안 된다 -
+            # 위 구현 노트의 '같은 바이트' 조건이 깨진다.
+            style = (f"animation:vorb {period:.0f}s linear infinite;"
+                     f"animation-delay:{-i * period / 4:.2f}s;")
+            cls = "vorb-lab"
+        else:
+            # 확정: front 가 아래(정면) 자리. 나머지는 제자리에 흐리게 선다.
+            theta = math.radians(90 + ((i - front) % 4) * 90)
+            x, y = rx * math.cos(theta), ry * math.sin(theta)
+            depth = (math.sin(theta) + 1) / 2
+            if i == front:
+                style = (f"transform:translate({x:.0f}px,{y:.0f}px) scale(1.25);"
+                         "font-weight:800;font-size:.92rem;opacity:1;")
+            else:
+                style = (f"transform:translate({x:.0f}px,{y:.0f}px) "
+                         f"scale({.75 + .3 * depth:.2f});opacity:.28;")
+            cls = "vorb-lab vorb-still"
+        labels.append(f'<span class="{cls}" style="{style}"><i>{name}</i></span>')
+
+    # 타원 궤도 keyframes - 12분할. 0% 가 아래(가까운 쪽)에서 시작한다.
+    frames = []
+    for k in range(13):
+        theta = math.radians(90 + 360 * k / 12)
+        x, y = rx * math.cos(theta), ry * math.sin(theta)
+        depth = (math.sin(theta) + 1) / 2          # 아래 1, 위 0
+        frames.append(f"{100 * k / 12:.2f}% {{ transform:"
+                      f"translate({x:.0f}px,{y:.0f}px) "
+                      f"scale({.75 + .45 * depth:.2f}); "
+                      f"opacity:{.3 + .7 * depth:.2f}; }}")
+
+    return (f'<div class="vorbit"><div class="vring"></div>{"".join(labels)}</div>'
+            "<style>"
+            ".verdict { position:relative; min-height:172px; }"
+            ".vorbit { position:absolute; right:1.4rem; top:50%; width:330px;"
+            " height:148px; transform:translateY(-50%); pointer-events:none; }"
+            ".vring { position:absolute; inset:14px 8px;"
+            " border:1.5px dashed currentColor; border-radius:50%; opacity:.22; }"
+            ".vorb-lab { position:absolute; left:50%; top:50%;"
+            f" font-size:.8rem; font-weight:600; color:{PALETTE['muted']}; }}"
+            ".vorb-lab i { display:block; font-style:normal;"
+            " transform:translate(-50%,-50%); white-space:nowrap; }"
+            ".vorb-still { color:inherit; }"
+            "@keyframes vorb { " + " ".join(frames) + " }"
+            # 움직임을 줄여 달라는 사용자에게는 돌리지 않는다. 미정임은
+            # 카드 글(판정 대기/주의)이 이미 말한다.
+            "@media (prefers-reduced-motion: reduce) {"
+            " .vorb-lab { animation:none !important; } }"
+            # 궤도가 본문 글과 겹칠 만큼 좁은 화면에서는 숨긴다
+            "@media (max-width:1100px) { .vorbit { display:none; } }"
+            "</style>")
 
 
 def render_verdict(verdict: dict | None, window: pd.DataFrame,
@@ -779,8 +879,10 @@ def render_verdict(verdict: dict | None, window: pd.DataFrame,
                    held=None) -> None:
     """판정 카드. api 가 보낸 판정을 그대로 보여준다 - 여기서 계산하지 않는다.
 
-    verdict 가 None 이면 아직 api 의 판정이 도착하지 않은 것이다. 측정은
-    먼저 오고 판정은 api 를 거쳐 오므로, 켜자마자 잠깐은 대기가 정상이다.
+    카드 오른쪽 빈자리에 후보 궤도(verdict_orbit)가 있다. 확정 전에는 후보
+    4개가 타원을 돌고, 확정되면 멈추면서 그 판정이 강조된다. 카드 자체는
+    언제나 이 함수가 그린다 - 2026-08-29 의 커버플로(카드가 통째로 도는
+    방식)는 이 구도로 되돌렸다.
 
     **카드는 두 층으로 나뉜다: 지금(위)과 있었음(아래).**
 
@@ -807,10 +909,10 @@ def render_verdict(verdict: dict | None, window: pd.DataFrame,
     if verdict is None:
         st.markdown(f"""
         <div class="verdict" style="background:{PALETTE['card']};color:{PALETTE['muted']};">
+          {verdict_orbit(0, spinning=True)}
           <div class="tag">● 판정</div>
           <h2>판정 대기 중</h2>
-          <div class="sub">api 의 판정 메시지를 기다리고 있습니다 —
-          api 컨테이너가 떠 있는지 확인하세요</div>
+          <div class="sub">판정이 확정되면 멈추고 그 유형이 강조됩니다</div>
         </div>""", unsafe_allow_html=True)
         return
 
@@ -818,7 +920,13 @@ def render_verdict(verdict: dict | None, window: pd.DataFrame,
 
     # 지목은 정상일 때 비어 있다(모델이 짚을 곳이 없다). 그때는 '–' 로 둔다.
     module, cell = verdict["module"], verdict["cell"]
-    sub = f"{verdict['detail']} · seq {verdict['seq']:,}"
+    # 확정 전에는 seq 를 적지 않는다. 매 판정마다 바뀌는 값이 카드에 있으면
+    # markdown 이 그때마다 다시 그려지고, 궤도 회전이 처음부터 다시 시작해
+    # 돌다 마는 것처럼 보인다(verdict_orbit 구현 노트). 추정 내용이 바뀌면
+    # 어차피 카드가 다시 그려지고, 그때의 재시작은 상태 전환이라 자연스럽다.
+    sub = verdict["detail"]
+    if not verdict["warmup"]:
+        sub = f"{sub} · seq {verdict['seq']:,}"
 
     # 고정 - 지금 판정이 이상이 아닌데 붙들 이상이 남아 있을 때만 갈아입힌다.
     # (이미 이상이면 그대로 두는 것이 맞다. 지금 것이 더 정확한 정보다)
@@ -844,23 +952,38 @@ def render_verdict(verdict: dict | None, window: pd.DataFrame,
         # 실제로 뒤집히므로(DEMO08 용접불량 M02 -> 센서불량 M14) 확정된
         # 것처럼 보이면 안 된다.
         if state == "정상":
-            headline = "이상 없음"
+            headline = "정상"
         else:
             headline = verdict["fault_type"] or "이상 감지"
-        if verdict["warmup"]:
-            headline += " (확정 전)"
+        # 미확정인데 짚은 것이 있을 때만 제목에 덧붙인다. 정상 팩까지
+        # '(주의)' 를 붙이면 '이상 없음 (주의)' 가 되어 말이 어긋난다 -
+        # 그 경우의 미확정은 아래 숫자 칸이 '주의' 로 이미 말한다.
+        if verdict["warmup"] and verdict["fault_type"]:
+            headline += " (주의)"
 
     module_ko = f"M{module:02d}" if module is not None else "–"
     cell_ko = f"CV{cell:02d}" if cell is not None else "–"
-    # 확정 여부를 숫자 칸 하나에 둔다. 차트 구간 길이는 왼쪽 레일에서 이미
-    # 고른 값이라 여기서 다시 알려 줄 필요가 없는데, 확정 여부는 이 판정을
+    # 확신 상태를 숫자 칸 하나에 둔다. 차트 구간 길이는 왼쪽 레일에서 이미
+    # 고른 값이라 여기서 다시 알려 줄 필요가 없는데, 이쪽은 이 판정을
     # 믿어도 되는가라는 가장 중요한 정보라 자리를 바꿨다.
-    confirm_ko = "확정 전" if verdict["warmup"] else "확정"
+    confirm_ko = confirm_label(verdict["warmup"], verdict["fault_type"])
+
+    # 궤도. 미정(warmup)이면 후보들이 돌고, 확정이면 판정된 유형이 정면에
+    # 멈춰 선다. 붙들린 이상(held)을 보여주는 중에는 그 유형을 세운다 -
+    # 이 행의 판정(정상)을 세우면 카드 제목(이상 발생)과 반대말이 된다.
+    orbit_fault = verdict["fault_type"]
+    if held is not None and state != "이상":
+        orbit_fault = held["fault"] or ""
+    first_fault = orbit_fault.split(",")[0].strip() if orbit_fault else ""
+    front = next((i for i, name in enumerate(VERDICT_CANDIDATES)
+                  if name == first_fault), 0)
+    orbit = verdict_orbit(front, spinning=verdict["warmup"] and held is None)
 
     model = verdict["model"]
     st.markdown(f"""
     <div class="verdict" style="background:{tone[1]};color:{tone[0]};">
-      <div class="tag">● 판정 · {model['name']} v{model['version']}</div>
+      {orbit}
+      <div class="tag">● 판정 · {state} · {model['name']} v{model['version']}</div>
       <h2>{headline}</h2>
       <div class="sub">{sub}</div>
       <div class="nums">
@@ -1348,11 +1471,12 @@ def render_results(verdicts: kc.VerdictBuffer, selected: int | None = None) -> N
 
     각 줄은 판정 메시지가 실어 온 것만 쓴다(여기서 계산하지 않는다).
 
-        PACK 9005   셀 단위 이상   M05 CV06   확정
-        PACK 9008   센서불량       M14        확정 전
+        PACK 9005   셀 단위 이상   M05 CV06   이상치 탐지
+        PACK 9008   센서불량       M14        주의
 
-    '확정 전' 은 SOC 칸이 아직 덜 찼다는 뜻이다(warmup). 그 줄의 유형과 지목은
+    '주의' 는 SOC 칸이 아직 덜 찼다는 뜻이다(warmup). 그 줄의 유형과 지목은
     뒤집힐 수 있어서 흐리게 둔다 - 색까지 같으면 확정된 결과와 구분이 안 된다.
+    말은 confirm_label 이 정한다.
     """
     st.markdown('<div class="cap" style="margin:1.1rem 0 .4rem;">'
                 '검사 결과 · 팩별 판정과 불량 요인</div>', unsafe_allow_html=True)
@@ -1372,7 +1496,7 @@ def render_results(verdicts: kc.VerdictBuffer, selected: int | None = None) -> N
         fault = v["fault_type"] or "–"
         where = target_label(v["module"], v["cell"], empty="–")
         pending = v["warmup"]
-        confirm = "확정 전" if pending else "확정"
+        confirm = confirm_label(pending, v["fault_type"])
         # 미확정 줄은 통째로 흐리게. 유형과 지목이 뒤집힐 수 있다는 것을
         # 색이 아니라 밝기로 말한다 - 색은 이미 판정(정상/주의/이상)이 쓴다.
         dim = "opacity:.55;" if pending else ""

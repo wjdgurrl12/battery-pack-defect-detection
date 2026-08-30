@@ -57,6 +57,13 @@ VS Code 라면 폴더를 열고 **Reopen in Container**. `dev` 에 붙고 나머
 docker compose exec dev python load_raw.py
 ```
 
+> **이 문서는 개발 스택 이야기다.** 시연·전달용으로는 코드·모델·데모 데이터까지
+> 구운 배포 이미지가 따로 있다. clone 도 적재도 필요 없이 `docker compose -f
+> docker-compose.prod.yml up -d` 한 줄이다. 아래의 함정(마운트, `uv sync`,
+> `--reload`)은 그쪽에는 해당하지 않는다 — 전부 이미지에 고정돼 있다.
+> 자세한 것은 [`README.md`](../README.md#배포용-이미지-clone-없이-띄우기) 와
+> [`CONTRIBUTING.md`](../CONTRIBUTING.md) 참고.
+
 ---
 
 ## 3. 서비스와 포트
@@ -113,7 +120,6 @@ api 가 기동할 때 `detector.load()` 가 읽는다.
 | `database.py` | Postgres → dict 스트림. 배제 규칙·통전 필터·5초 정규화를 **읽는 시점에** 적용 |
 | `sensor_generator.py` | dict → Kafka 메시지. 재생 도구 |
 | `load_raw.py` | CSV → Postgres (최초 1회) |
-| `inject_anomalies.py` | 이상 측정 주입 도구 (개발용) |
 | `src/battery_pack_defect_detection/` | 공용 패키지 — `consumer.py`(Kafka), `detector.py`(모델 접착부) |
 | `battery_anomaly.py` | **모델팀 인수인계본.** 오토인코더 2개 + 로버스트 통계. 팩(충전 세션) 단위로 합/불을 낸다 |
 | `pack_loader.py` | 측정 → 모델 입력(`PackData`). **학습과 추론이 같은 전처리를 거치게 하는 것**이 이 파일의 일이다 |
@@ -132,31 +138,23 @@ api 가 기동할 때 `detector.load()` 가 읽는다.
 
 ### 데이터 흘리기
 
-```bash
-# 팩 하나를 빠르게 (개발용). 기본 간격은 3초라 그대로 두면 오래 걸린다
-docker compose exec dev python sensor_generator.py --serial 1000 --mode chg --limit 500 --interval 0.05
-
-# 전량 재생 (38,058건 / 3초 간격이면 약 32시간)
-docker compose exec dev python sensor_generator.py
-
-# 이상치를 섞어 재생. 구간마다 120행에 한 번, 무작위 셀 하나를 6행 연속 -60mV 로 띄운다
-# (띄운 행은 label: "defect" 로 나간다. --anomaly-burst / --anomaly-mv / --seed 로 조절)
-docker compose exec dev python sensor_generator.py --serial 1000 --mode chg --anomaly-every 120
-```
-
-### 이상 주입 (일회성)
-
-재생 중에 계속 섞으려면 위의 `--anomaly-every` 를 쓰고, 원하는 순간에
-원하는 팩/셀 하나만 찔러 보려면 이 도구를 쓴다.
+보통은 화면 오른쪽 위의 **재생** 버튼이면 된다(초기화 후 데모 9팩을 흘린다).
+터미널에서 직접 돌리려면:
 
 ```bash
-# 같은 셀을 여러 행에 걸쳐 띄운다. api 판정을 되읽어 결과를 알려 준다
-docker compose exec dev python inject_anomalies.py --serial 1000
-docker compose exec dev python inject_anomalies.py --serial 1000 --module 3 --cell 7 --mv -80
+# 데모 팩 9개 (기본). 팩당 816건
+docker compose exec dev python sensor_generator.py --interval 0.15
+
+# 데모 한 팩만 빠르게
+docker compose exec dev python sensor_generator.py --serial 9003 --interval 0.05
+
+# 예전 원본 50팩 (38,058건 / 3초 간격이면 약 32시간)
+docker compose exec dev python sensor_generator.py --original
 ```
 
-**측정을 먼저 충분히 흘린 뒤에** 주입한다. 모델은 충전 세션 시작 후
-60 판정행(300초)이 지나야 온도까지 보고, 임계 초과가 2행 이어져야 알람을 낸다.
+> 발행 직전에 값을 흔들던 주입 도구(`--anomaly-every`, `inject_anomalies.py`)는
+> 2026-08-30 에 걷어냈다. 고장은 데모 팩 데이터 자체에 들어 있다
+> (`database.DEMO_PACKS` 가 정답표다). 도구는 [`old/`](../old/README.md) 에 있다.
 
 ### 상태 보기
 
