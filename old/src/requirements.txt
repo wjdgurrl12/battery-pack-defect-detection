@@ -1,0 +1,14 @@
+# 학습 환경과 동일하게 고정한다.
+# model_chg_op.pkl 안에 sklearn 의 PCA / IsolationForest 객체가 그대로 들어 있어서,
+# scikit-learn 버전이 다르면 로드가 깨지거나 조용히 다르게 동작한다. 필수 고정.
+numpy==2.3.5
+scikit-learn==1.9.0
+pandas==3.0.3
+
+# 서비스
+fastapi>=0.115
+uvicorn[standard]>=0.34
+aiokafka>=0.12
+pydantic>=2.9
+
+# scipy 는 STEP 7 학습(EVT 적합)에만 쓰인다. 운영 추론에는 필요 없다.

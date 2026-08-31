@@ -9,9 +9,14 @@
 # 반면 의존성(uv add)만 바뀐 경우는 이미지를 다시 굽지 않아도 된다. 아래 서비스들이
 # 뜰 때마다 `uv sync --locked` 로 자기 /opt/venv 를 uv.lock 에 맞추기 때문이다.
 # uv.lock 은 git 으로 전파되므로, 받는 쪽은 git pull 후 up -d 만 하면 된다.
+# Dockerfile 이 이미지 넷을 담게 되면서 target 을 명시한다. 이 파일은 개발용이라
+# 늘 dev 를 굽는다. 배포용(runtime, postgres-demo)은 docker-compose.prod.yml 이
+# 가져간다 - 그쪽은 코드를 이미지에 굽고 마운트를 쓰지 않는다.
 x-app: &app
-  image: 4dcookie/vibration-monitoring-dev:0.1.0
-  build: .
+  image: 4dcookie/vibration-monitoring-dev:0.1.1
+  build:
+    context: .
+    target: dev
   pull_policy: missing
   volumes:
     - .:/workspace
@@ -31,8 +36,22 @@ x-app-env: &app-env
   # editable 설치가 만들어 주는 .pth 도 없다. 그 자리를 이 한 줄이 대신한다.
   # (이게 없으면 세 컨테이너 모두 `import battery_pack_defect_detection` 이 실패한다)
   PYTHONPATH: /workspace/src
-  DATABASE_URL: postgresql://app:app@postgres:5432/appdb
+  DATABASE_URL: postgresql+psycopg://app:app@postgres:5432/appdb
   KAFKA_BROKER: broker:19092
+
+  # ── 이상탐지 모델 ────────────────────────────────────────────────────────
+  # api 가 기동할 때 detector.load() 가 읽는다. 코드에 같은 기본값이 있지만
+  # 여기서 한 번 더 못 박는 이유는, models/ 에 pkl 이 하나 더 생겼을 때
+  # 어느 것을 쓰는지가 조용히 바뀌면 안 되기 때문이다. 모델 교체는 이 줄을
+  # 고치는 눈에 보이는 행위여야 한다.
+  #
+  # 학습은 `docker compose exec dev python train_anomaly.py` 로 한다.
+  # 파일이 없으면 api 가 기동하지 않는다 - 판정 없이 도는 것보다 낫다.
+  BD_ANOMALY_MODEL: /workspace/models/battery_anomaly.pkl
+
+  # 2026-08-27: 옛 모델의 BD_ARTIFACT_BUNDLE / BD_SRC_DIR / BD_SOURCE_HZ /
+  # BD_SCORE_KEY / BD_VERIFY_HASH 를 여기서 뺐다. 그 모델은 old/ 로 옮겼고
+  # 어디에서도 import 하지 않는다. 되살리는 방법은 old/README.md 에 있다.
 
 services:
   # 개발 작업을 하는 컨테이너. VS Code Dev Containers 가 여기에 붙는다.
@@ -74,7 +93,8 @@ services:
       - "8501:8501"
     environment:
       PYTHONPATH: /workspace/src
-      API_BASE_URL: http://api:3000
+      # 화면은 Kafka 두 토픽(측정/판정)만 구독한다. DB 직결은 3단계에서 제거했다.
+      KAFKA_BROKER: broker:19092
     depends_on:
       api:
         condition: service_healthy

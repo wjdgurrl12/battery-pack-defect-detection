@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/wjdgurrl/battery-pack-defect-detection/verdictdata.json",
+  "title": "PackVerdict",
+  "description": "api 가 측정 메시지를 모델로 판정한 결과 1건. 모델은 이상 점수를 내지 않으므로 이 메시지에 점수·임계는 없다. 실리는 것은 판정(state)과 문제 모듈·셀 지목, 불량 유형뿐이고, streamlit 은 그것만 보고 화면을 칠한다. **측정 전 건에 대해 발행되지는 않는다** - 모델이 판정에 쓰지 않은 행(솎임·비통전·과도구간·중복·방전)에는 아무것도 발행하지 않는다(2026-08-26 결정, x-conventions 참고).",
+  "x-kafka": {
+    "topic": "battery.pack.verdict",
+    "partitions": 3,
+    "key": {
+      "field": "serial_number",
+      "encoding": "UTF-8 string",
+      "rationale": "측정 토픽과 같은 키를 쓴다. 팩 하나의 판정이 한 파티션에 모여 발생 순서가 보장되고, 측정과 판정을 같은 기준으로 짝지을 수 있다."
+    },
+    "value": {
+      "format": "JSON",
+      "encoding": "UTF-8"
+    },
+    "producer": {
+      "service": "api (main.py)",
+      "acks": "all",
+      "note": "battery.pack.measurement 를 구독해 모델이 판정한 행만 이 토픽으로 낸다. 판정 행은 5초에 1건이라(학습 격자 5초/행) 1초/행 측정 대비 약 1/5 이다. 측정 메시지가 2,131바이트인데 판정은 300바이트 안팎이라, 건수·대역폭 모두 부담이 작다."
+    },
+    "consumers": [
+      {
+        "service": "streamlit",
+        "group_id": "streamlit-verdict",
+        "auto_offset_reset": "earliest"
+      }
+    ],
+    "headers": {
+      "state": "'normal' | 'warning' | 'anomaly'. 값 안의 state 와 같다. kafka-ui 필터와 컨슈머가 JSON 을 파싱하지 않고 알림 대상만 거르는 데 쓴다. 측정 토픽이 mode 를 헤더에 싣는 것과 같은 패턴이다."
+    }
+  },
+  "x-conventions": {
+    "traceability": "event_id 는 판정 대상 측정 메시지의 id 다. 알림에서 원본 측정으로 되짚어 갈 수 있게 반드시 실어 보낸다.",
+    "model_stamp": "model.name / model.version 은 이 판정을 낸 모델이다. 모델을 바꾸면 version 이 바뀌므로, 과거 알림이 어느 모델의 판단인지 남는다.",
+    "index_base": "module 은 1~16, cell 은 1~11 이다. 사람이 읽는 M03 / CV07 과 같은 번호다. 배열 인덱스(0부터)와 1 차이가 나는 점을 주의한다.",
+    "timestamps": "measured_at 은 센서 측정 시각(KST), detected_at 은 api 가 판정한 시각(UTC)이다. 재생 시스템이라 둘이 크게 다르다.",
+    "all_states": "정상 판정도 발행한다. 이상치만 보내면 화면이 판정 카드와 타일을 칠할 근거가 없어진다(2026-08-24 결정). 판정 권한은 api 한 곳에 둔다.",
+    "no_score": "**판정 메시지에 점수를 싣지 않는다**(2026-08-25 결정, 2026-08-26 유지). score / threshold / module_scores 는 1.0.0 에 있었으나 삭제했다. 모델이 안에서 재구성 오차와 임계값을 쓰지만 그것은 모델의 사정이고, 토픽으로 나가는 것은 판정과 지목뿐이다. 화면이 숫자를 보여주려면 모델이 그 숫자를 계약에 넣어야 한다.",
+    "display_source": "화면이 쓰는 것은 state 와 module 두 가지다. 모듈 타일 16개 중 module 이 짚은 하나에만 상태 색이 들어가고, 나머지는 중립색으로 남는다.",
+    "nullable_target": "module / cell 은 지목이 없으면 null 이다. state 가 'normal' 일 때는 짚을 문제가 없어서고, 'warning' 일 때는 원인 분석(SPE 기여도 분해 + 유형 분류)을 알람이 뜬 시점에만 계산하기 때문이다 - 평시 비용을 낮추려는 모델 쪽 설계다. 'anomaly' 라도 유형이 모듈 단위(용접불량)나 온도 센서(센서불량)를 짚으면 cell 만 null 이 된다. 컨슈머는 두 값이 없을 수 있다고 보고 다뤄야 한다.",
+    "not_every_measurement": "**측정 전 건이 판정되지는 않는다**(2026-08-26 결정). 모델은 학습 때와 같은 전처리를 거친 행만 받는다 - 5초 격자로 솎아낸 행, 통전 중(|I| > 1.0 A)인 행, 전류 급변 직후 5행을 뺀 행, 중복이 아닌 행, 그리고 충전 구간(mode='chg')뿐이다. 그 밖의 행에는 아무것도 발행하지 않는다. 판정하지 않은 것에 'normal' 을 실어 보내면 컨슈머가 '아직 판정 전' 과 '정상' 을 구분할 수 없기 때문이다. 컨슈머는 판정이 매 측정마다 오지 않는다고 보고 마지막 판정을 들고 있어야 한다.",
+    "state_meaning": "state 는 모델의 지속 조건에서 나온다. 모델은 점수가 임계를 넘은 행이 2 판정행(=10초) 이어져야 알람을 낸다. normal = 임계 이하, warning = 임계 초과 1행째(아직 지속 조건 미달), anomaly = 지속 조건 충족. 전류 급변 직후의 전압 스파이크 같은 한순간 초과가 알람이 되지 않게 하는 장치이고, 화면의 3단계가 그 중간 상태를 그대로 쓴다.",
+    "warmup": "충전 세션 시작 후 60 판정행(=300초)은 **온도 판정(T2/T3/T5)이 보류**다. 모델이 온도 오프셋을 그 구간에서 추정하기 때문이다. 그동안의 'normal' 은 '전압 기준으로는 정상' 이라는 뜻이지 온도까지 봤다는 뜻이 아니다. 화면이 이 구간을 그냥 '정상' 으로 표시하면 오해를 부른다 - '판정 준비 중' 으로 정직하게 드러낼 것. api 를 재시작하면 팩별 상태가 날아가므로 이 구간이 다시 생긴다."
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "verdict_id",
+    "detected_at",
+    "event_id",
+    "serial_number",
+    "mode",
+    "measured_at",
+    "seq",
+    "state",
+    "module",
+    "cell",
+    "fault_type",
+    "warmup",
+    "detail",
+    "model"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "2.1.0",
+      "description": "판정 메시지 명세 버전. 2.1.0 에서 fault_type / warmup 을 더했다. 필드 추가는 minor 라 2.0.0 컨슈머는 두 필드를 모르는 채로도 그대로 돈다(docs/kafka-message-spec.md 의 버전 규칙)"
+    },
+    "verdict_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "판정 고유 ID. 알림 중복 제거에 쓴다"
+    },
+    "detected_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "api 가 판정한 시각(UTC)"
+    },
+    "event_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "판정 대상 측정 메시지의 event_id. 추적용"
+    },
+    "serial_number": {
+      "type": "integer",
+      "description": "팩 식별자. 메시지 키와 같다"
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "chg",
+        "dchg"
+      ]
+    },
+    "measured_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "센서 측정 시각(KST)"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "측정 메시지의 재생 순번"
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "warning",
+        "anomaly"
+      ],
+      "description": "정상 / 주의 / 이상. 모델이 내는 판정 그 자체다. 화면이 이 값으로 색을 고른다"
+    },
+    "module": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 16,
+      "description": "문제 모듈 번호(M01~M16). 지목이 없으면 null - 'normal' 은 항상, 'warning' 도 항상, 'anomaly' 는 모델이 못 짚었을 때"
+    },
+    "cell": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 11,
+      "description": "문제 셀 번호(CV01~CV11). 지목이 없으면 null. 유형이 모듈 단위(용접불량)이거나 온도 센서(센서불량)를 짚으면 module 만 있고 cell 은 null 이다"
+    },
+    "fault_type": {
+      "type": "string",
+      "enum": [
+        "",
+        "용량불량",
+        "용접불량",
+        "센싱와이어불량",
+        "센서불량",
+        "미분류"
+      ],
+      "description": "불량 유형. state 가 'anomaly' 일 때만 채워지고 그 밖에는 빈 문자열이다. 모델이 알람 시점의 증거(셀 이탈·모듈 편차·인접쌍 차·온도 잔차)를 보고 고른다. '미분류' 는 알람은 맞지만 네 유형 중 어디에도 들어맞지 않은 경우다"
+    },
+    "warmup": {
+      "type": "boolean",
+      "description": "True 면 **온도 판정(T2/T3/T5)이 보류 중**이다. 충전 세션 시작 후 60 판정행(=300초) 동안 그렇다. 이 구간의 'normal' 은 전압 기준으로만 정상이라는 뜻이라, 화면이 그냥 '정상' 으로 칠하면 안 된다(x-conventions.warmup 참고)"
+    },
+    "detail": {
+      "type": "string",
+      "description": "사람이 읽는 요약. 예: '용량불량 M08 CV01', '임계 초과 - 지속 확인 중', '이상 없음', '이상 없음(온도 판정 준비 중)'"
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ],
+      "description": "이 판정을 낸 모델",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema_version": "2.1.0",
+      "verdict_id": "7c1e9a04-2b83-4f61-9d27-5ae0c3f81b44",
+      "detected_at": "2026-08-26T06:12:44.108Z",
+      "event_id": "018f3a2c-6b41-7c9e-a5d2-3f8e1b0c7d94",
+      "serial_number": 1003,
+      "mode": "chg",
+      "measured_at": "2020-08-07T16:25:38+09:00",
+      "seq": 2007,
+      "state": "anomaly",
+      "module": 8,
+      "cell": 1,
+      "fault_type": "용량불량",
+      "warmup": false,
+      "detail": "용량불량 M08 CV01",
+      "model": {
+        "name": "battery-anomaly-b_option",
+        "version": "20260825_165511"
+      }
+    },
+    {
+      "schema_version": "2.1.0",
+      "verdict_id": "b04f2a91-77c5-4e30-8a16-2d9f5c1e0a83",
+      "detected_at": "2026-08-26T06:12:47.212Z",
+      "event_id": "018f3a2c-9d17-7a40-b8e3-51c7a2f09b6d",
+      "serial_number": 1003,
+      "mode": "chg",
+      "measured_at": "2020-08-07T16:20:33+09:00",
+      "seq": 1702,
+      "state": "normal",
+      "module": null,
+      "cell": null,
+      "fault_type": "",
+      "warmup": true,
+      "detail": "이상 없음(온도 판정 준비 중)",
+      "model": {
+        "name": "battery-anomaly-b_option",
+        "version": "20260825_165511"
+      }
+    }
+  ]
+}

@@ -1,3 +1,7 @@
 # 이 저장소의 파일은 컨테이너(Linux) 안에서 그대로 쓰이므로 줄바꿈을 LF 로 통일한다.
 # (Windows 에서 체크아웃하면서 CRLF 가 섞이면 셸 스크립트나 entrypoint 가 조용히 깨진다)
 * text=auto eol=lf
+# 모델 번들은 pickle 이다. text=auto 가 알아서 바이너리로 보긴 하지만,
+# 여기서 한 번이라도 CRLF 변환이 일어나면 3.2 MB 짜리 모델이 조용히 깨진다.
+# 명시적으로 못 박아 둔다.
+*.bundle -text

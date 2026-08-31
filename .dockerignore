@@ -1,3 +1,5 @@
+# 빌드 컨텍스트에서 뺄 것. 여기서 거른 만큼 빌드가 빨라지고 이미지가 작아진다.
+
 .venv
 .git
 .gitignore
@@ -7,5 +9,22 @@ build/
 dist/
 wheels/
 *.egg-info
+.pytest_cache/
+.ruff_cache/
 .devcontainer.json
 docker-compose.yml
+docker-compose.prod.yml
+
+# 원시 데이터 600MB 는 컨텍스트에 올리지 않는다. 개발 컨테이너는 마운트로
+# 보고, 배포 이미지는 아예 필요가 없다(측정은 Postgres 에서 나온다).
+#
+# 예외는 데모 팩 9개뿐이다. postgres-demo 이미지가 이 CSV 를 재료로 만들어진다
+# (Dockerfile 의 seedgen 스테이지). 이 줄이 빠지면 그 스테이지가 빈손이 된다.
+db/data/*
+!db/data/DEMO*_chg.csv
+
+# 이미지 안에서 쓰지 않는 것들
+docs/
+old/
+tests/
+*.json

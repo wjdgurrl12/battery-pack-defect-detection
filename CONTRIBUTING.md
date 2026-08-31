@@ -21,24 +21,62 @@ docker compose restart api streamlit
 
 > `uv pip install` 은 쓰지 않는다. `uv.lock` 에 기록되지 않아 아무에게도 전파되지 않는다.
 
+## 이미지 셋
+
+`Dockerfile` 하나가 이미지 셋을 담는다. 바닥(`deps` = 의존성)이 같아서 파일을
+나누면 두 벌이 어긋나기 때문이다. 무엇을 구울지는 `target` 으로 고른다.
+
+| target | 이미지 | 쓰는 곳 | 코드 |
+|---|---|---|---|
+| `dev` | `4dcookie/vibration-monitoring-dev` | `docker-compose.yml` | 안 굽는다 (마운트) |
+| `runtime` | `4dcookie/battery-pack-app` | `docker-compose.prod.yml` 의 api·streamlit | 굽는다 |
+| `postgres-demo` | `4dcookie/battery-pack-postgres-demo` | `docker-compose.prod.yml` 의 postgres | 데모 9팩 적재본 |
+
+`seedgen` 은 중간 스테이지다. 데모 CSV → COPY 덤프 변환만 하고 이미지로 남지
+않는다. 변환은 `load_raw.read_rows` 를 그대로 빌려 쓴다 — 적재 규칙을 SQL 로
+옮겨 적으면 개발 DB 와 배포 DB 의 내용이 조용히 갈라진다.
+
 ## 이미지를 다시 구워야 하는 경우
 
-`Dockerfile` 이 바뀔 때뿐이다 — 시스템 패키지(apt), 파이썬 버전, uv 설정 등.
-이때는 **태그를 올리는 것까지가 한 세트**다.
+**개발 이미지**는 `Dockerfile` 의 `deps`/`dev` 가 바뀔 때뿐이다 — 시스템
+패키지(apt), 파이썬 버전, uv 설정 등. 의존성만 바뀐 경우는 굽지 않는다.
+
+**배포 이미지**는 그 위에 하나가 더 있다 — **코드나 모델이 바뀌면 다시 구워야
+한다.** 이미지 안에 들어 있기 때문이다. 데모 CSV(`db/data/DEMO*_chg.csv`)가
+바뀌면 `postgres-demo` 도 함께 다시 굽는다.
+
+어느 쪽이든 **태그를 올리는 것까지가 한 세트**다.
 
 ```bash
-# 1) docker-compose.yml 의 x-app.image 태그를 올린다
-#    4dcookie/vibration-monitoring-dev:0.1.0  ->  :0.1.1
-# 2) 굽고 올린다 (앱 이미지 하나만 push 된다)
 docker login
+
+# 개발 이미지 — docker-compose.yml 의 x-app.image 태그를 먼저 올린다
 docker compose build
 docker compose push
-# 3) 확인
-docker compose up -d --wait
-docker compose exec dev pytest
+
+# 배포 이미지 — docker-compose.prod.yml 의 태그를 먼저 올린다
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml push
 ```
 
-`Dockerfile` 과 `docker-compose.yml` 을 한 커밋에 담아 PR 을 올린다.
+확인은 각자 띄워 본다. 배포 쪽은 포트가 겹치므로 개발 스택을 먼저 내린다.
+
+```bash
+docker compose up -d --wait && docker compose exec dev pytest
+docker compose down
+
+docker compose -f docker-compose.prod.yml up -d --wait
+curl -s localhost:3000/health
+curl -s -X POST 'localhost:3000/replay/start?interval=0.02&limit=1200'
+curl -s localhost:3000/stats     # judged 가 늘어나면 판정까지 도는 것이다
+docker compose -f docker-compose.prod.yml down -v
+```
+
+> `down -v` 로 볼륨을 지우는 것이 중요하다. 데모 적재는 데이터 디렉터리가 비어
+> 있을 때 **1회**만 도는 초기화 스크립트라, 볼륨이 남아 있으면 이미지를 새로
+> 구워도 옛 데이터가 그대로 뜬다.
+
+`Dockerfile` 과 compose 파일을 한 커밋에 담아 PR 을 올린다.
 
 **태그를 그대로 두고 push 하면 안 된다.** Hub 의 이미지는 갱신되지만 `pull_policy: missing`
 때문에 로컬에 `0.1.0` 이 이미 있는 팀원은 새로 받지 않는다. "나는 되는데 너만 안 되는"
